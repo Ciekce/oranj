@@ -749,7 +749,7 @@ namespace oranj
 	{
 		const auto halfmove = currState().halfmove;
 
-		if (halfmove >= 100)
+		if (halfmove >= 140)
 		{
 			if (!isCheck())
 				return true;
