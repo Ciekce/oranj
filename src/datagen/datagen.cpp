@@ -236,12 +236,9 @@ namespace oranj::datagen
 
 					if (!move)
 					{
-						if (thread->pos.isCheck())
-							outcome = thread->pos.toMove() == Color::Black
-								? Outcome::WhiteWin
-								: Outcome::WhiteLoss;
-						else outcome = Outcome::Draw; // stalemate
-
+						outcome = thread->pos.toMove() == Color::Black
+							? Outcome::WhiteWin
+							: Outcome::WhiteLoss;
 						break;
 					}
 
@@ -290,7 +287,20 @@ namespace oranj::datagen
 
 					assert(eval::staticEvalOnce(thread->pos) == eval::staticEval(thread->pos, thread->nnueState));
 
-					if (thread->pos.isDrawn(false))
+					if (thread->pos.isBareKingWin())
+					{
+						if (thread->pos.toMove() == Color::Black)
+						{
+							outcome = Outcome::WhiteLoss;
+							output.push(true, move, ScoreMate);
+						}
+						else
+						{
+							outcome = Outcome::WhiteWin;
+							output.push(true, move, -ScoreMate);
+						}
+					}
+					else if (thread->pos.isDrawn(false))
 					{
 						outcome = Outcome::Draw;
 						output.push(true, move, 0);
