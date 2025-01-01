@@ -14,15 +14,14 @@ endif
 PGO = off
 COMMIT_HASH = off
 
-SOURCES_COMMON := src/main.cpp src/uci.cpp src/util/split.cpp src/position/position.cpp src/movegen.cpp src/search.cpp src/util/timer.cpp src/pretty.cpp src/ttable.cpp src/limit/time.cpp src/eval/nnue.cpp src/perft.cpp src/bench.cpp src/tunable.cpp src/opts.cpp src/3rdparty/fathom/tbprobe.cpp src/datagen/datagen.cpp src/wdl.cpp src/cuckoo.cpp src/datagen/marlinformat.cpp src/datagen/viriformat.cpp src/datagen/fen.cpp src/tb.cpp src/3rdparty/zstd/zstddeclib.c src/eval/nnue/io_impl.cpp src/util/ctrlc.cpp
+SOURCES_COMMON := src/main.cpp src/uci.cpp src/util/split.cpp src/position/position.cpp src/movegen.cpp src/search.cpp src/util/timer.cpp src/pretty.cpp src/ttable.cpp src/limit/time.cpp src/eval/nnue.cpp src/perft.cpp src/bench.cpp src/tunable.cpp src/opts.cpp src/datagen/datagen.cpp src/wdl.cpp src/cuckoo.cpp src/datagen/marlinformat.cpp src/datagen/viriformat.cpp src/datagen/fen.cpp src/3rdparty/zstd/zstddeclib.c src/eval/nnue/io_impl.cpp src/util/ctrlc.cpp
 SOURCES_BMI2 := src/attacks/bmi2/attacks.cpp
 SOURCES_BLACK_MAGIC := src/attacks/black_magic/attacks.cpp
 
 SUFFIX :=
 
 CXX := clang++
-# silence warning for fathom
-CXXFLAGS := -std=c++20 -O3 -flto -DNDEBUG -DOJ_NETWORK_FILE=\"$(EVALFILE)\" -DOJ_VERSION=$(VERSION) -D_SILENCE_CXX20_ATOMIC_INIT_DEPRECATION_WARNING
+CXXFLAGS := -std=c++20 -O3 -flto -DNDEBUG -DOJ_NETWORK_FILE=\"$(EVALFILE)\" -DOJ_VERSION=$(VERSION)
 
 CXXFLAGS_NATIVE := -DOJ_NATIVE -march=native
 CXXFLAGS_TUNABLE := -DOJ_NATIVE -march=native -DOJ_EXTERNAL_TUNE=1
@@ -47,8 +46,6 @@ endif
 ifeq ($(OS), Windows_NT)
     DETECTED_OS := Windows
     SUFFIX := .exe
-    # for fathom
-    CXXFLAGS += -D_CRT_SECURE_NO_WARNINGS
     RM := del
 else
     DETECTED_OS := $(shell uname -s)
