@@ -13,6 +13,8 @@
 
 a work-in-progress UCI [shatranj] engine based on [Stormphrax], with NNUE evaluation trained from zero knowledge starting with random weights
 
+Supersedes [Stormphranj]
+
 ## Strength
 ??
 
@@ -129,6 +131,7 @@ oranj's networks are trained with [bullet].
 [shatranj]: https://en.wikipedia.org/wiki/Shatranj
 
 [stormphrax]: https://github.com/Ciekce/Stormphrax
+[stormphranj]: https://github.com/Ciekce/Stormphranj
 
 [incbin]: https://github.com/graphitemaster/incbin
 [zstandard]: https://github.com/facebook/zstd
