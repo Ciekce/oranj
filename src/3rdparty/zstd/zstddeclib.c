@@ -2616,15 +2616,15 @@ size_t FSE_buildCTable_rle (FSE_CTable* ct, unsigned char symbolValue);
 #define FSE_BUILD_CTABLE_WORKSPACE_SIZE(maxSymbolValue, tableLog) (sizeof(unsigned) * FSE_BUILD_CTABLE_WORKSPACE_SIZE_U32(maxSymbolValue, tableLog))
 size_t FSE_buildCTable_wksp(FSE_CTable* ct, const short* normalizedCounter, unsigned maxSymbolValue, unsigned tableLog, void* workSpace, size_t wkspSize);
 
-#define FSE_BUILD_DTABLE_WKSP_SIZE(maxTableLog, maxSymbolValue) (sizeof(short) * (maxSymbolValue + 1) + (1ULL << maxTableLog) + 8)
-#define FSE_BUILD_DTABLE_WKSP_SIZE_U32(maxTableLog, maxSymbolValue) ((FSE_BUILD_DTABLE_WKSP_SIZE(maxTableLog, maxSymbolValue) + sizeof(unsigned) - 1) / sizeof(unsigned))
+#define FSE_BUILD_DTABLE_WKOJ_SIZE(maxTableLog, maxSymbolValue) (sizeof(short) * (maxSymbolValue + 1) + (1ULL << maxTableLog) + 8)
+#define FSE_BUILD_DTABLE_WKOJ_SIZE_U32(maxTableLog, maxSymbolValue) ((FSE_BUILD_DTABLE_WKOJ_SIZE(maxTableLog, maxSymbolValue) + sizeof(unsigned) - 1) / sizeof(unsigned))
 FSE_PUBLIC_API size_t FSE_buildDTable_wksp(FSE_DTable* dt, const short* normalizedCounter, unsigned maxSymbolValue, unsigned tableLog, void* workSpace, size_t wkspSize);
-/**< Same as FSE_buildDTable(), using an externally allocated `workspace` produced with `FSE_BUILD_DTABLE_WKSP_SIZE_U32(maxSymbolValue)` */
+/**< Same as FSE_buildDTable(), using an externally allocated `workspace` produced with `FSE_BUILD_DTABLE_WKOJ_SIZE_U32(maxSymbolValue)` */
 
-#define FSE_DECOMPRESS_WKSP_SIZE_U32(maxTableLog, maxSymbolValue) (FSE_DTABLE_SIZE_U32(maxTableLog) + 1 + FSE_BUILD_DTABLE_WKSP_SIZE_U32(maxTableLog, maxSymbolValue) + (FSE_MAX_SYMBOL_VALUE + 1) / 2 + 1)
-#define FSE_DECOMPRESS_WKSP_SIZE(maxTableLog, maxSymbolValue) (FSE_DECOMPRESS_WKSP_SIZE_U32(maxTableLog, maxSymbolValue) * sizeof(unsigned))
+#define FSE_DECOMPRESS_WKOJ_SIZE_U32(maxTableLog, maxSymbolValue) (FSE_DTABLE_SIZE_U32(maxTableLog) + 1 + FSE_BUILD_DTABLE_WKOJ_SIZE_U32(maxTableLog, maxSymbolValue) + (FSE_MAX_SYMBOL_VALUE + 1) / 2 + 1)
+#define FSE_DECOMPRESS_WKOJ_SIZE(maxTableLog, maxSymbolValue) (FSE_DECOMPRESS_WKOJ_SIZE_U32(maxTableLog, maxSymbolValue) * sizeof(unsigned))
 size_t FSE_decompress_wksp_bmi2(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize, int bmi2);
-/**< same as FSE_decompress(), using an externally allocated `workSpace` produced with `FSE_DECOMPRESS_WKSP_SIZE_U32(maxLog, maxSymbolValue)`.
+/**< same as FSE_decompress(), using an externally allocated `workSpace` produced with `FSE_DECOMPRESS_WKOJ_SIZE_U32(maxLog, maxSymbolValue)`.
  * Set bmi2 to 1 if your CPU supports BMI2 or 0 if it doesn't */
 
 typedef enum {
@@ -3168,7 +3168,7 @@ size_t HUF_readStats(BYTE* huffWeight, size_t hwSize,
  * 4-byte aligned and its size must be >= HUF_READ_STATS_WORKSPACE_SIZE.
  * If the CPU has BMI2 support, pass bmi2=1, otherwise pass bmi2=0.
  */
-#define HUF_READ_STATS_WORKSPACE_SIZE_U32 FSE_DECOMPRESS_WKSP_SIZE_U32(6, HUF_TABLELOG_MAX-1)
+#define HUF_READ_STATS_WORKSPACE_SIZE_U32 FSE_DECOMPRESS_WKOJ_SIZE_U32(6, HUF_TABLELOG_MAX-1)
 #define HUF_READ_STATS_WORKSPACE_SIZE (HUF_READ_STATS_WORKSPACE_SIZE_U32 * sizeof(unsigned))
 size_t HUF_readStats_wksp(BYTE* huffWeight, size_t hwSize,
                           U32* rankStats, U32* nbSymbolsPtr, U32* tableLogPtr,
@@ -3724,7 +3724,7 @@ static size_t FSE_buildDTable_internal(FSE_DTable* dt, const short* normalizedCo
     U32 highThreshold = tableSize-1;
 
     /* Sanity Checks */
-    if (FSE_BUILD_DTABLE_WKSP_SIZE(tableLog, maxSymbolValue) > wkspSize) return ERROR(maxSymbolValue_tooLarge);
+    if (FSE_BUILD_DTABLE_WKOJ_SIZE(tableLog, maxSymbolValue) > wkspSize) return ERROR(maxSymbolValue_tooLarge);
     if (maxSymbolValue > FSE_MAX_SYMBOL_VALUE) return ERROR(maxSymbolValue_tooLarge);
     if (tableLog > FSE_MAX_TABLELOG) return ERROR(tableLog_tooLarge);
 
@@ -3927,7 +3927,7 @@ FORCE_INLINE_TEMPLATE size_t FSE_decompress_wksp_body(
         cSrcSize -= NCountLength;
     }
 
-    if (FSE_DECOMPRESS_WKSP_SIZE(tableLog, maxSymbolValue) > wkspSize) return ERROR(tableLog_tooLarge);
+    if (FSE_DECOMPRESS_WKOJ_SIZE(tableLog, maxSymbolValue) > wkspSize) return ERROR(tableLog_tooLarge);
     assert(sizeof(*wksp) + FSE_DTABLE_SIZE(tableLog) <= wkspSize);
     workSpace = (BYTE*)workSpace + sizeof(*wksp) + FSE_DTABLE_SIZE(tableLog);
     wkspSize -= sizeof(*wksp) + FSE_DTABLE_SIZE(tableLog);
@@ -17059,8 +17059,8 @@ static UNUSED_ATTR const U32 ML_base[MaxML+1] = {
 
  #define SEQSYMBOL_TABLE_SIZE(log)   (1 + (1 << (log)))
 
-#define ZSTD_BUILD_FSE_TABLE_WKSP_SIZE (sizeof(S16) * (MaxSeq + 1) + (1u << MaxFSELog) + sizeof(U64))
-#define ZSTD_BUILD_FSE_TABLE_WKSP_SIZE_U32 ((ZSTD_BUILD_FSE_TABLE_WKSP_SIZE + sizeof(U32) - 1) / sizeof(U32))
+#define ZSTD_BUILD_FSE_TABLE_WKOJ_SIZE (sizeof(S16) * (MaxSeq + 1) + (1u << MaxFSELog) + sizeof(U64))
+#define ZSTD_BUILD_FSE_TABLE_WKOJ_SIZE_U32 ((ZSTD_BUILD_FSE_TABLE_WKOJ_SIZE + sizeof(U32) - 1) / sizeof(U32))
 #define ZSTD_HUFFDTABLE_CAPACITY_LOG 12
 
 typedef struct {
@@ -17069,7 +17069,7 @@ typedef struct {
     ZSTD_seqSymbol MLTable[SEQSYMBOL_TABLE_SIZE(MLFSELog)];    /* and therefore must be at least HUF_DECOMPRESS_WORKSPACE_SIZE large */
     HUF_DTable hufTable[HUF_DTABLE_SIZE(ZSTD_HUFFDTABLE_CAPACITY_LOG)];  /* can accommodate HUF_decompress4X */
     U32 rep[ZSTD_REP_NUM];
-    U32 workspace[ZSTD_BUILD_FSE_TABLE_WKSP_SIZE_U32];
+    U32 workspace[ZSTD_BUILD_FSE_TABLE_WKOJ_SIZE_U32];
 } ZSTD_entropyDTables_t;
 
 typedef enum { ZSTDds_getFrameHeaderSize, ZSTDds_decodeFrameHeader,
@@ -17618,7 +17618,7 @@ size_t ZSTD_decompressBlock_internal(ZSTD_DCtx* dctx,
  * this function must be called with valid parameters only
  * (dt is large enough, normalizedCounter distribution total is a power of 2, max is within range, etc.)
  * in which case it cannot fail.
- * The workspace must be 4-byte aligned and at least ZSTD_BUILD_FSE_TABLE_WKSP_SIZE bytes, which is
+ * The workspace must be 4-byte aligned and at least ZSTD_BUILD_FSE_TABLE_WKOJ_SIZE bytes, which is
  * defined in zstd_decompress_internal.h.
  * Internal use only.
  */
@@ -20476,7 +20476,7 @@ void ZSTD_buildFSETable_body(ZSTD_seqSymbol* dt,
     /* Sanity Checks */
     assert(maxSymbolValue <= MaxSeq);
     assert(tableLog <= MaxFSELog);
-    assert(wkspSize >= ZSTD_BUILD_FSE_TABLE_WKSP_SIZE);
+    assert(wkspSize >= ZSTD_BUILD_FSE_TABLE_WKOJ_SIZE);
     (void)wkspSize;
     /* Init, lay down lowprob symbols */
     {   ZSTD_seqSymbol_header DTableH;

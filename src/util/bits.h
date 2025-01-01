@@ -1,19 +1,19 @@
 /*
- * Stormphrax, a UCI chess engine
- * Copyright (C) 2024 Ciekce
+ * oranj, a UCI shatranj engine
+ * Copyright (C) 2025 Ciekce
  *
- * Stormphrax is free software: you can redistribute it and/or modify
+ * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Stormphrax is distributed in the hope that it will be useful,
+ * oranj is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Stormphrax. If not, see <https://www.gnu.org/licenses/>.
+ * along with oranj. If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -28,7 +28,7 @@
 
 #include "../arch.h"
 
-namespace stormphrax::util
+namespace oranj::util
 {
 	namespace fallback
 	{
@@ -105,7 +105,7 @@ namespace stormphrax::util
 
 	[[nodiscard]] constexpr auto lsb(u64 v) -> u64
 	{
-#if SP_HAS_BMI1
+#if OJ_HAS_BMI1
 		if (std::is_constant_evaluated())
 			return fallback::lsb(v);
 
@@ -117,7 +117,7 @@ namespace stormphrax::util
 
 	[[nodiscard]] constexpr auto resetLsb(u64 v) -> u64
 	{
-#if SP_HAS_BMI1
+#if OJ_HAS_BMI1
 		if (std::is_constant_evaluated())
 			return fallback::resetLsb(v);
 
@@ -129,7 +129,7 @@ namespace stormphrax::util
 
 	[[nodiscard]] constexpr auto popcnt(u64 v)
 	{
-#if SP_HAS_POPCNT
+#if OJ_HAS_POPCNT
 		if (std::is_constant_evaluated())
 			return fallback::popcnt(v);
 
@@ -141,7 +141,7 @@ namespace stormphrax::util
 
 	[[nodiscard]] constexpr auto ctz(u64 v)
 	{
-#if SP_HAS_BMI1
+#if OJ_HAS_BMI1
 		if (std::is_constant_evaluated())
 			return fallback::ctz(v);
 
@@ -153,7 +153,7 @@ namespace stormphrax::util
 
 	[[nodiscard]] constexpr auto pext(u64 v, u64 mask) -> u64
 	{
-#if SP_HAS_BMI2
+#if OJ_HAS_BMI2
 		if (std::is_constant_evaluated())
 			return fallback::pext(v, mask);
 
@@ -165,7 +165,7 @@ namespace stormphrax::util
 
 	[[nodiscard]] constexpr auto pdep(u64 v, u64 mask) -> u64
 	{
-#if SP_HAS_BMI2
+#if OJ_HAS_BMI2
 		if (std::is_constant_evaluated())
 			return fallback::pdep(v, mask);
 

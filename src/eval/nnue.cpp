@@ -1,19 +1,19 @@
 /*
- * Stormphrax, a UCI chess engine
- * Copyright (C) 2024 Ciekce
+ * oranj, a UCI shatranj engine
+ * Copyright (C) 2025 Ciekce
  *
- * Stormphrax is free software: you can redistribute it and/or modify
+ * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Stormphrax is distributed in the hope that it will be useful,
+ * oranj is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Stormphrax. If not, see <https://www.gnu.org/licenses/>.
+ * along with oranj. If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "nnue.h"
@@ -24,7 +24,7 @@
 #include "nnue/io_impl.h"
 
 #ifdef _MSC_VER
-#define SP_MSVC
+#define OJ_MSVC
 #pragma push_macro("_MSC_VER")
 #undef _MSC_VER
 #endif
@@ -32,21 +32,21 @@
 #define INCBIN_PREFIX g_
 #include "../3rdparty/incbin.h"
 
-#ifdef SP_MSVC
+#ifdef OJ_MSVC
 #pragma pop_macro("_MSC_VER")
-#undef SP_MSVC
+#undef OJ_MSVC
 #endif
 
 namespace
 {
-	INCBIN(std::byte, defaultNet, SP_NETWORK_FILE);
+	INCBIN(std::byte, defaultNet, OJ_NETWORK_FILE);
 }
 
-namespace stormphrax::eval
+namespace oranj::eval
 {
 	namespace
 	{
-		SP_ENUM_FLAGS(u16, NetworkFlags)
+		OJ_ENUM_FLAGS(u16, NetworkFlags)
 		{
 			None = 0x0000,
 			ZstdCompressed = 0x0001,

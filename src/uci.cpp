@@ -1,19 +1,19 @@
 /*
- * Stormphrax, a UCI chess engine
- * Copyright (C) 2024 Ciekce
+ * oranj, a UCI shatranj engine
+ * Copyright (C) 2025 Ciekce
  *
- * Stormphrax is free software: you can redistribute it and/or modify
+ * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Stormphrax is distributed in the hope that it will be useful,
+ * oranj is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Stormphrax. If not, see <https://www.gnu.org/licenses/>.
+ * along with oranj. If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "uci.h"
@@ -48,7 +48,7 @@
 #include "3rdparty/fathom/tbprobe.h"
 #include "wdl.h"
 
-namespace stormphrax
+namespace oranj
 {
 	using namespace uci;
 
@@ -56,11 +56,11 @@ namespace stormphrax
 
 	namespace
 	{
-		constexpr auto Name = "Stormphrax";
-		constexpr auto Version = SP_STRINGIFY(SP_VERSION);
+		constexpr auto Name = "oranj";
+		constexpr auto Version = OJ_STRINGIFY(OJ_VERSION);
 		constexpr auto Author = "Ciekce";
 
-#if SP_EXTERNAL_TUNE
+#if OJ_EXTERNAL_TUNE
 		auto tunableParams() -> auto &
 		{
 			static auto params = []
@@ -190,8 +190,8 @@ namespace stormphrax
 		{
 			static const opts::GlobalOptions defaultOpts{};
 
-#ifdef SP_COMMIT_HASH
-			std::cout << "id name " << Name << ' ' << Version << ' ' << SP_STRINGIFY(SP_COMMIT_HASH) << '\n';
+#ifdef OJ_COMMIT_HASH
+			std::cout << "id name " << Name << ' ' << Version << ' ' << OJ_STRINGIFY(OJ_COMMIT_HASH) << '\n';
 #else
 			std::cout << "id name " << Name << ' ' << Version << '\n';
 #endif
@@ -226,7 +226,7 @@ namespace stormphrax
 				<< " max " << search::SyzygyProbeLimitRange.max() << '\n';
 			std::cout << "option name EvalFile type string default <internal>" << std::endl;
 
-#if SP_EXTERNAL_TUNE
+#if OJ_EXTERNAL_TUNE
 			for (const auto &param : tunableParams())
 			{
 				std::cout << "option name " << param.name << " type spin default " << param.defaultValue
@@ -461,7 +461,7 @@ namespace stormphrax
 					{
 						if (g_opts.enableWeirdTcs)
 							std::cout
-								<< "info string Warning: Stormphrax does not officially"
+								<< "info string Warning: oranj does not officially"
 									" support cyclic (movestogo) time controls" << std::endl;
 						else
 						{
@@ -476,7 +476,7 @@ namespace stormphrax
 					{
 						if (g_opts.enableWeirdTcs)
 							std::cout
-								<< "info string Warning: Stormphrax does not officially"
+								<< "info string Warning: oranj does not officially"
 								   " support sudden death (0 increment) time controls" << std::endl;
 						else
 						{
@@ -699,7 +699,7 @@ namespace stormphrax
 						else eval::loadNetwork(valueStr);
 					}
 				}
-#if SP_EXTERNAL_TUNE
+#if OJ_EXTERNAL_TUNE
 				else if (auto *param = lookupTunableParam(nameStr))
 				{
 					if (!valueEmpty
@@ -890,7 +890,7 @@ namespace stormphrax
 		}
 	}
 
-#if SP_EXTERNAL_TUNE
+#if OJ_EXTERNAL_TUNE
 	namespace tunable
 	{
 		auto addTunableParam(const std::string &name, i32 value,
@@ -950,7 +950,7 @@ namespace stormphrax
 			return str.str();
 		}
 
-#if SP_EXTERNAL_TUNE
+#if OJ_EXTERNAL_TUNE
 		namespace
 		{
 			auto printParams(std::span<const std::string> params,
@@ -1042,6 +1042,6 @@ namespace stormphrax
 
 			printParams(params, printParam);
 		}
-#endif // SP_EXTERNAL_TUNE
+#endif // OJ_EXTERNAL_TUNE
 	}
 }

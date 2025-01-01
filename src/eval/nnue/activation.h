@@ -1,19 +1,19 @@
 /*
- * Stormphrax, a UCI chess engine
- * Copyright (C) 2024 Ciekce
+ * oranj, a UCI shatranj engine
+ * Copyright (C) 2025 Ciekce
  *
- * Stormphrax is free software: you can redistribute it and/or modify
+ * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Stormphrax is distributed in the hope that it will be useful,
+ * oranj is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Stormphrax. If not, see <https://www.gnu.org/licenses/>.
+ * along with oranj. If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -28,7 +28,7 @@
 
 #include "../../util/simd.h"
 
-namespace stormphrax::eval::nnue::activation
+namespace oranj::eval::nnue::activation
 {
 	template <typename T>
 	concept Activation = requires(T t)
@@ -68,7 +68,7 @@ namespace stormphrax::eval::nnue::activation
 
 		static constexpr u8 Id = 3;
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
 			OutputVector sum, InputVector inputs, InputVector weights)
 		{
 			using namespace util::simd;
@@ -76,7 +76,7 @@ namespace stormphrax::eval::nnue::activation
 			return mulAddAdjAcc<InputType>(sum, inputs, weights);
 		}
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
 			OutputVector sum, InputVector inputs1, InputVector inputs2, InputVector weights)
 		{
 			using namespace util::simd;
@@ -85,7 +85,7 @@ namespace stormphrax::eval::nnue::activation
 			return mulAddAdjAcc<InputType>(sum, products, inputs2);
 		}
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
 		{
 			return value;
 		}
@@ -102,7 +102,7 @@ namespace stormphrax::eval::nnue::activation
 
 		static constexpr u8 Id = 2;
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
 			OutputVector sum, InputVector inputs, InputVector weights)
 		{
 			using namespace util::simd;
@@ -111,7 +111,7 @@ namespace stormphrax::eval::nnue::activation
 			return mulAddAdjAcc<InputType>(sum, activated, weights);
 		}
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
 			OutputVector sum, InputVector inputs1, InputVector inputs2, InputVector weights)
 		{
 			using namespace util::simd;
@@ -123,7 +123,7 @@ namespace stormphrax::eval::nnue::activation
 			return mulAddAdjAcc<InputType>(sum, products, activated2);
 		}
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
 		{
 			return value;
 		}
@@ -140,7 +140,7 @@ namespace stormphrax::eval::nnue::activation
 
 		static constexpr u8 Id = 0;
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
 			OutputVector sum, InputVector inputs, InputVector weights)
 		{
 			using namespace util::simd;
@@ -151,7 +151,7 @@ namespace stormphrax::eval::nnue::activation
 			return mulAddAdjAcc<InputType>(sum, clipped, weights);
 		}
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
 			OutputVector sum, InputVector inputs1, InputVector inputs2, InputVector weights)
 		{
 			using namespace util::simd;
@@ -165,7 +165,7 @@ namespace stormphrax::eval::nnue::activation
 			return mulAddAdjAcc<InputType>(sum, clipped2, products);
 		}
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
 		{
 			return value;
 		}
@@ -182,7 +182,7 @@ namespace stormphrax::eval::nnue::activation
 
 		static constexpr u8 Id = 1;
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
 			OutputVector sum, InputVector inputs, InputVector weights)
 		{
 			using namespace util::simd;
@@ -194,7 +194,7 @@ namespace stormphrax::eval::nnue::activation
 			return mulAddAdjAcc<InputType>(sum, crelu, clipped);
 		}
 
-		SP_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
+		OJ_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
 		{
 			return value / static_cast<OutputType>(Max);
 		}
