@@ -28,13 +28,8 @@ if(OJ_EMBED_COMMIT_HASH)
 	endif()
 endif()
 
-# for fathom
-add_compile_definitions(_SILENCE_CXX20_ATOMIC_INIT_DEPRECATION_WARNING)
-
 if(MSVC)
 	add_compile_options(/EHsc)
-	# for fathom
-	add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:DebugDLL>")
 endif()
 
@@ -52,18 +47,16 @@ set(STORMPHRAX_COMMON_SRC src/types.h src/main.cpp src/uci.h src/uci.cpp src/cor
 	src/pretty.cpp src/rays.h src/ttable.h src/ttable.cpp src/limit/limit.h src/limit/trivial.h src/limit/time.h
 	src/limit/time.cpp src/util/cemath.h src/eval/nnue.h src/eval/nnue.cpp src/util/range.h src/arch.h src/perft.h
 	src/perft.cpp src/search_fwd.h src/see.h src/bench.h src/bench.cpp src/tunable.h src/tunable.cpp src/opts.h
-	src/opts.cpp src/position/boards.h src/3rdparty/fathom/stdendian.h src/3rdparty/fathom/tbconfig.h
-	src/3rdparty/fathom/tbprobe.h src/3rdparty/fathom/tbprobe.cpp src/datagen/datagen.h src/datagen/datagen.cpp
-	src/util/u4array.h src/eval/eval.h src/util/barrier.h src/util/simd.h src/wdl.h src/wdl.cpp src/eval/arch.h
-	src/cuckoo.h src/cuckoo.cpp src/eval/nnue/network.h src/eval/nnue/layers/dense_affine.h src/eval/nnue/activation.h
-	src/eval/nnue/output.h src/eval/nnue/input.h src/util/memstream.h src/util/aligned_array.h src/eval/nnue/io.h
-	src/eval/nnue/features.h src/datagen/format.h src/datagen/common.h src/datagen/marlinformat.h
-	src/datagen/marlinformat.cpp src/datagen/viriformat.h src/datagen/viriformat.cpp src/tb.h src/tb.cpp
-	src/movepick.h src/history.h src/util/multi_array.h src/correction.h src/limit/compound.h
-	src/eval/nnue/layers/scale.h src/eval/nnue/layers/dequantize.h src/util/simd/x64common.h src/util/simd/avx512.h
-	src/util/simd/avx2.h src/util/simd/sse41.h src/util/simd/neon.h src/util/simd/none.h src/util/align.h
-	src/3rdparty/zstd/zstddeclib.c src/eval/nnue/io_impl.h src/eval/nnue/io_impl.cpp src/datagen/fen.h
-	src/datagen/fen.cpp src/util/ctrlc.h src/util/ctrlc.cpp)
+	src/opts.cpp src/position/boards.h src/datagen/datagen.h src/datagen/datagen.cpp src/util/u4array.h src/eval/eval.h
+	src/util/barrier.h src/util/simd.h src/wdl.h src/wdl.cpp src/eval/arch.h src/cuckoo.h src/cuckoo.cpp
+	src/eval/nnue/network.h src/eval/nnue/layers/dense_affine.h src/eval/nnue/activation.h src/eval/nnue/output.h
+	src/eval/nnue/input.h src/util/memstream.h src/util/aligned_array.h src/eval/nnue/io.h src/eval/nnue/features.h
+	src/datagen/format.h src/datagen/common.h src/datagen/marlinformat.h src/datagen/marlinformat.cpp
+	src/datagen/viriformat.h src/datagen/viriformat.cpp src/movepick.h src/history.h src/util/multi_array.h
+	src/correction.h src/limit/compound.h src/eval/nnue/layers/scale.h src/eval/nnue/layers/dequantize.h
+	src/util/simd/x64common.h src/util/simd/avx512.h src/util/simd/avx2.h src/util/simd/sse41.h src/util/simd/neon.h
+	src/util/simd/none.h src/util/align.h src/3rdparty/zstd/zstddeclib.c src/eval/nnue/io_impl.h
+	src/eval/nnue/io_impl.cpp src/datagen/fen.h src/datagen/fen.cpp src/util/ctrlc.h src/util/ctrlc.cpp)
 
 set(STORMPHRAX_BMI2_SRC src/attacks/bmi2/data.h src/attacks/bmi2/attacks.h src/attacks/bmi2/attacks.cpp)
 set(STORMPHRAX_NON_BMI2_SRC src/attacks/black_magic/data.h src/attacks/black_magic/attacks.h

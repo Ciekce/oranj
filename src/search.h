@@ -255,7 +255,6 @@ namespace oranj::search
 		enum class RootStatus
 		{
 			NoLegalMoves = 0,
-			Tablebase,
 			Generated,
 			Searchmoves,
 		};

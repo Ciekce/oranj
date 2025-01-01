@@ -45,7 +45,6 @@
 #include "bench.h"
 #include "opts.h"
 #include "tunable.h"
-#include "3rdparty/fathom/tbprobe.h"
 #include "wdl.h"
 
 namespace oranj
@@ -113,8 +112,6 @@ namespace oranj
 			auto handleSplitperft(const std::vector<std::string> &tokens) -> void;
 			auto handleBench(const std::vector<std::string> &tokens) -> void;
 
-			bool m_fathomInitialized{false};
-
 			search::Searcher m_searcher{};
 
 			Position m_pos{Position::starting()};
@@ -124,11 +121,7 @@ namespace oranj
 
 		UciHandler::~UciHandler()
 		{
-			// can't do this in a destructor, because it will run after tb_free is called
 			m_searcher.quit();
-
-			if (m_fathomInitialized)
-				tb_free();
 		}
 
 		auto UciHandler::run() -> i32
@@ -217,13 +210,6 @@ namespace oranj
 				<< " min " << limit::SoftNodeHardLimitMultiplierRange.min()
 				<< " max " << limit::SoftNodeHardLimitMultiplierRange.max() << '\n';
 			std::cout << "option name EnableWeirdTCs type check default " << defaultOpts.enableWeirdTcs << std::endl;
-			std::cout << "option name SyzygyPath type string default <empty>\n";
-			std::cout << "option name SyzygyProbeDepth type spin default " << defaultOpts.syzygyProbeDepth
-				<< " min " << search::SyzygyProbeDepthRange.min()
-				<< " max " << search::SyzygyProbeDepthRange.max() << '\n';
-			std::cout << "option name SyzygyProbeLimit type spin default " << defaultOpts.syzygyProbeLimit
-				<< " min " << search::SyzygyProbeLimitRange.min()
-				<< " max " << search::SyzygyProbeLimitRange.max() << '\n';
 			std::cout << "option name EvalFile type string default <internal>" << std::endl;
 
 #if OJ_EXTERNAL_TUNE
@@ -646,41 +632,6 @@ namespace oranj
 					{
 						if (const auto newEnableWeirdTcs = util::tryParseBool(valueStr))
 							opts::mutableOpts().enableWeirdTcs = *newEnableWeirdTcs;
-					}
-				}
-				else if (nameStr == "syzygypath")
-				{
-					if (m_searcher.searching())
-						std::cerr << "still searching" << std::endl;
-
-					m_fathomInitialized = true;
-
-					if (valueEmpty)
-					{
-						opts::mutableOpts().syzygyEnabled = false;
-						tb_init("");
-					}
-					else
-					{
-						opts::mutableOpts().syzygyEnabled = valueStr != "<empty>";
-						if (!tb_init(valueStr.c_str()))
-							std::cerr << "failed to initialize Fathom" << std::endl;
-					}
-				}
-				else if (nameStr == "syzygyprobedepth")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newSyzygyProbeDepth = util::tryParseI32(valueStr))
-							opts::mutableOpts().syzygyProbeDepth = search::SyzygyProbeLimitRange.clamp(*newSyzygyProbeDepth);
-					}
-				}
-				else if (nameStr == "syzygyprobelimit")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newSyzygyProbeLimit = util::tryParseI32(valueStr))
-							opts::mutableOpts().syzygyProbeLimit = search::SyzygyProbeLimitRange.clamp(*newSyzygyProbeLimit);
 					}
 				}
 				else if (nameStr == "evalfile")

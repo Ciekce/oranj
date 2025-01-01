@@ -24,8 +24,6 @@
 #include "uci.h"
 #include "limit/trivial.h"
 #include "opts.h"
-#include "3rdparty/fathom/tbprobe.h"
-#include "tb.h"
 #include "see.h"
 
 namespace oranj::search
@@ -172,9 +170,6 @@ namespace oranj::search
 			thread.nnueState.reset(thread.pos.bbs(), thread.pos.kings());
 		}
 
-		if (status == RootStatus::Tablebase)
-			m_threads[0].search.tbhits = 1;
-
 		m_startTime = startTime;
 
 		m_stop.store(false, std::memory_order::seq_cst);
@@ -281,35 +276,7 @@ namespace oranj::search
 	auto Searcher::initRootMoves(const Position &pos) -> RootStatus
 	{
 		m_rootMoves.clear();
-
-		if (g_opts.syzygyEnabled
-			&& pos.bbs().occupancy().popcount()
-			<= std::min(g_opts.syzygyProbeLimit, static_cast<i32>(TB_LARGEST)))
-		{
-			bool success = true;
-
-			switch (tb::probeRoot(m_rootMoves, pos))
-			{
-				case tb::ProbeResult::Win:
-					m_minRootScore = ScoreTbWin;
-					break;
-				case tb::ProbeResult::Draw:
-					m_minRootScore = m_maxRootScore = 0;
-					break;
-				case tb::ProbeResult::Loss:
-					m_maxRootScore = -ScoreTbWin;
-					break;
-				default:
-					success = false;
-					break;
-			}
-
-			if (success)
-				return RootStatus::Tablebase;
-		}
-
-		if (m_rootMoves.empty())
-			generateLegal(m_rootMoves, pos);
+		generateLegal(m_rootMoves, pos);
 
 		return m_rootMoves.empty() ? RootStatus::NoLegalMoves : RootStatus::Generated;
 	}
@@ -572,70 +539,6 @@ namespace oranj::search
 
 		const bool ttMoveNoisy = ttEntry.move && pos.isNoisy(ttEntry.move);
 		const bool ttpv = PvNode || ttEntry.wasPv;
-
-		const auto pieceCount = bbs.occupancy().popcount();
-
-		auto syzygyMin = -ScoreMate;
-		auto syzygyMax =  ScoreMate;
-
-		const auto syzygyPieceLimit = std::min(g_opts.syzygyProbeLimit, static_cast<i32>(TB_LARGEST));
-
-		// Probe the Syzygy tablebases for a WDL result
-		// if there are few enough pieces left on the board
-		if (!RootNode
-			&& !curr.excluded
-			&& g_opts.syzygyEnabled
-			&& pieceCount <= syzygyPieceLimit
-			&& (pieceCount < syzygyPieceLimit || depth >= g_opts.syzygyProbeDepth)
-			&& pos.halfmove() == 0
-			&& pos.castlingRooks() == CastlingRooks{})
-		{
-			const auto result = tb::probe(pos);
-
-			if (result != tb::ProbeResult::Failed)
-			{
-				thread.search.incTbHits();
-
-				Score score{};
-				TtFlag flag{};
-
-				if (result == tb::ProbeResult::Win)
-				{
-					score = ScoreTbWin - ply;
-					flag = TtFlag::LowerBound;
-				}
-				else if (result == tb::ProbeResult::Loss)
-				{
-					score = -ScoreTbWin + ply;
-					flag = TtFlag::UpperBound;
-				}
-				else // draw
-				{
-					score = drawScore(thread.search.loadNodes());
-					flag = TtFlag::Exact;
-				}
-
-				if (flag == TtFlag::Exact
-					|| flag == TtFlag::UpperBound && score <= alpha
-					|| flag == TtFlag::LowerBound && score >= beta)
-				{
-					m_ttable.put(pos.key(), score, ScoreNone, NullMove, depth, ply, flag, ttpv);
-					return score;
-				}
-
-				if constexpr (PvNode)
-				{
-					if (flag == TtFlag::UpperBound)
-						syzygyMax = score;
-					else // lower bound (win)
-					{
-						if (score > alpha)
-							alpha = score;
-						syzygyMin = score;
-					}
-				}
-			}
-		}
 
 		if (depth >= 3
 			&& !curr.excluded
@@ -1069,8 +972,6 @@ namespace oranj::search
 			}
 		}
 
-		bestScore = std::clamp(bestScore, syzygyMin, syzygyMax);
-
 		if (!curr.excluded)
 		{
 			if (!inCheck
@@ -1305,19 +1206,6 @@ namespace oranj::search
 		}
 
 		std::cout << " hashfull " << m_ttable.full();
-
-		if (g_opts.syzygyEnabled)
-		{
-			usize tbhits = 0;
-
-			// technically a potential race but it doesn't matter
-			for (const auto &thread : m_threads)
-			{
-				tbhits += thread.search.loadTbHits();
-			}
-
-			std::cout << " tbhits " << tbhits;
-		}
 
 		std::cout << " pv";
 
