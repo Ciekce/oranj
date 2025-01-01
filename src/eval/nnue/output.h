@@ -60,20 +60,6 @@ namespace oranj::eval::nnue::output
 		}
 	};
 
-	struct [[maybe_unused]] Ocb
-	{
-		static constexpr u32 BucketCount = 2;
-
-		static inline auto getBucket(const BitboardSet &bbs) -> u32
-		{
-			return (!bbs.blackBishops().empty()
-					&& !bbs.whiteBishops().empty()
-					&& (bbs.blackBishops() & boards::LightSquares).empty()
-						!= (bbs.whiteBishops() & boards::LightSquares).empty())
-				? 1 : 0;
-		}
-	};
-
 	template <OutputBucketing L, OutputBucketing R>
 		requires (!std::is_same_v<L, Single> && !std::is_same_v<R, Single>)
 	struct [[maybe_unused]] Combo

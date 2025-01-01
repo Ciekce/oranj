@@ -98,10 +98,10 @@ namespace oranj
 			const auto n4 = n3 / 6;
 			const auto  q = n3 % 6;
 
-			dst[b1 * 2 + 1] = PieceType::Bishop;
-			dst[b2 * 2    ] = PieceType::Bishop;
+			dst[b1 * 2 + 1] = PieceType::Alfil;
+			dst[b2 * 2    ] = PieceType::Alfil;
 
-			placeInNthFree(q, PieceType::Queen);
+			placeInNthFree(q, PieceType::Ferz);
 
 			const auto [knight1, knight2] = N5n[n4];
 
@@ -138,20 +138,10 @@ namespace oranj
 	template auto Position::movePiece<false, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
 	template auto Position::movePiece<true, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
 
-	template auto Position::promotePawn<false, false>(Piece, Square, Square, PieceType, eval::NnueUpdates &) -> Piece;
-	template auto Position::promotePawn<true, false>(Piece, Square, Square, PieceType, eval::NnueUpdates &) -> Piece;
-	template auto Position::promotePawn<false, true>(Piece, Square, Square, PieceType, eval::NnueUpdates &) -> Piece;
-	template auto Position::promotePawn<true, true>(Piece, Square, Square, PieceType, eval::NnueUpdates &) -> Piece;
-
-	template auto Position::castle<false, false>(Piece, Square, Square, eval::NnueUpdates &) -> void;
-	template auto Position::castle<true, false>(Piece, Square, Square, eval::NnueUpdates &) -> void;
-	template auto Position::castle<false, true>(Piece, Square, Square, eval::NnueUpdates &) -> void;
-	template auto Position::castle<true, true>(Piece, Square, Square, eval::NnueUpdates &) -> void;
-
-	template auto Position::enPassant<false, false>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::enPassant<true, false>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::enPassant<false, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::enPassant<true, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
+	template auto Position::promotePawn<false, false>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
+	template auto Position::promotePawn<true, false>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
+	template auto Position::promotePawn<false, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
+	template auto Position::promotePawn<true, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
 
 	Position::Position()
 	{
@@ -172,19 +162,14 @@ namespace oranj
 		auto &bbs = state.boards.bbs();
 
 		bbs.forPiece(PieceType::  Pawn) = U64(0x00FF00000000FF00);
+		bbs.forPiece(PieceType:: Alfil) = U64(0x2400000000000024);
+		bbs.forPiece(PieceType::  Ferz) = U64(0x1000000000000010);
 		bbs.forPiece(PieceType::Knight) = U64(0x4200000000000042);
-		bbs.forPiece(PieceType::Bishop) = U64(0x2400000000000024);
 		bbs.forPiece(PieceType::  Rook) = U64(0x8100000000000081);
-		bbs.forPiece(PieceType:: Queen) = U64(0x0800000000000008);
-		bbs.forPiece(PieceType::  King) = U64(0x1000000000000010);
+		bbs.forPiece(PieceType::  King) = U64(0x0800000000000008);
 
 		bbs.forColor(Color::Black) = U64(0xFFFF000000000000);
 		bbs.forColor(Color::White) = U64(0x000000000000FFFF);
-
-		state.castlingRooks.black().kingside  = Square::H8;
-		state.castlingRooks.black().queenside = Square::A8;
-		state.castlingRooks.white().kingside  = Square::H1;
-		state.castlingRooks.white().queenside = Square::A1;
 
 		m_blackToMove = false;
 		m_fullmove = 1;
@@ -216,13 +201,13 @@ namespace oranj
 
 		if (tokens.size() == 3)
 		{
-			std::cerr << "missing en passant square in fen " << fen << std::endl;
+			std::cerr << "missing fourth field in fen " << fen << std::endl;
 			return false;
 		}
 
 		if (tokens.size() == 2)
 		{
-			std::cerr << "missing castling availability in fen " << fen << std::endl;
+			std::cerr << "missing third field in fen " << fen << std::endl;
 			return false;
 		}
 
@@ -340,144 +325,16 @@ namespace oranj
 			return false;
 		}
 
-		const auto &castlingFlags = tokens[2];
-
-		if (castlingFlags.length() > 4)
+		if (tokens[2] != "-")
 		{
-			std::cerr << "invalid castling availability in fen " << fen << std::endl;
+			std::cerr << "invalid 3rd field in fen " << fen << std::endl;
 			return false;
 		}
 
-		if (castlingFlags.length() != 1 || castlingFlags[0] != '-')
+		if (tokens[3] != "-")
 		{
-			if (g_opts.chess960)
-			{
-				for (i32 rank = 0; rank < 8; ++rank)
-				{
-					for (i32 file = 0; file < 8; ++file)
-					{
-						const auto square = toSquare(rank, file);
-
-						const auto piece = newState.boards.pieceAt(square);
-						if (piece != Piece::None && pieceType(piece) == PieceType::King)
-							newState.kings.color(pieceColor(piece)) = square;
-					}
-				}
-
-				for (const auto flag : castlingFlags)
-				{
-					if (flag >= 'a' && flag <= 'h')
-					{
-						const auto file = static_cast<i32>(flag - 'a');
-						const auto kingFile = squareFile(newState.kings.black());
-
-						if (file == kingFile)
-						{
-							std::cerr << "invalid castling availability in fen " << fen << std::endl;
-							return false;
-						}
-
-						if (file < kingFile)
-							newState.castlingRooks.black().queenside = toSquare(7, file);
-						else newState.castlingRooks.black().kingside = toSquare(7, file);
-					}
-					else if (flag >= 'A' && flag <= 'H')
-					{
-						const auto file = static_cast<i32>(flag - 'A');
-						const auto kingFile = squareFile(newState.kings.white());
-
-						if (file == kingFile)
-						{
-							std::cerr << "invalid castling availability in fen " << fen << std::endl;
-							return false;
-						}
-
-						if (file < kingFile)
-							newState.castlingRooks.white().queenside = toSquare(0, file);
-						else newState.castlingRooks.white().kingside = toSquare(0, file);
-					}
-					else if (flag == 'k')
-					{
-						for (i32 file = squareFile(newState.kings.black()) + 1; file < 8; ++file)
-						{
-							const auto square = toSquare(7, file);
-							if (newState.boards.pieceAt(square) == Piece::BlackRook)
-							{
-								newState.castlingRooks.black().kingside = square;
-								break;
-							}
-						}
-					}
-					else if (flag == 'K')
-					{
-						for (i32 file = squareFile(newState.kings.white()) + 1; file < 8; ++file)
-						{
-							const auto square = toSquare(0, file);
-							if (newState.boards.pieceAt(square) == Piece::WhiteRook)
-							{
-								newState.castlingRooks.white().kingside = square;
-								break;
-							}
-						}
-					}
-					else if (flag == 'q')
-					{
-						for (i32 file = squareFile(newState.kings.black()) - 1; file >= 0; --file)
-						{
-							const auto square = toSquare(7, file);
-							if (newState.boards.pieceAt(square) == Piece::BlackRook)
-							{
-								newState.castlingRooks.black().queenside = square;
-								break;
-							}
-						}
-					}
-					else if (flag == 'Q')
-					{
-						for (i32 file = squareFile(newState.kings.white()) - 1; file >= 0; --file)
-						{
-							const auto square = toSquare(0, file);
-							if (newState.boards.pieceAt(square) == Piece::WhiteRook)
-							{
-								newState.castlingRooks.white().queenside = square;
-								break;
-							}
-						}
-					}
-					else
-					{
-						std::cerr << "invalid castling availability in fen " << fen << std::endl;
-						return false;
-					}
-				}
-			}
-			else
-			{
-				for (const auto flag : castlingFlags)
-				{
-					switch (flag)
-					{
-					case 'k': newState.castlingRooks.black().kingside  = Square::H8; break;
-					case 'q': newState.castlingRooks.black().queenside = Square::A8; break;
-					case 'K': newState.castlingRooks.white().kingside  = Square::H1; break;
-					case 'Q': newState.castlingRooks.white().queenside = Square::A1; break;
-					default:
-						std::cerr << "invalid castling availability in fen " << fen << std::endl;
-						return false;
-					}
-				}
-			}
-		}
-
-		const auto &enPassant = tokens[3];
-
-		if (enPassant != "-")
-		{
-			if (newState.enPassant = squareFromString(enPassant); newState.enPassant == Square::None)
-			{
-				std::cerr << "invalid en passant square in fen " << fen << std::endl;
-				return false;
-			}
+			std::cerr << "invalid 4th field in fen " << fen << std::endl;
+			return false;
 		}
 
 		const auto &halfmoveStr = tokens[4];
@@ -540,8 +397,6 @@ namespace oranj
 
 		const auto backrank = scharnaglToBackrank(n);
 
-		bool firstRook = true;
-
 		for (i32 i = 0; i < 8; ++i)
 		{
 			const auto blackSquare = toSquare(7, i);
@@ -549,22 +404,6 @@ namespace oranj
 
 			state.boards.setPiece(blackSquare, colorPiece(backrank[i], Color::Black));
 			state.boards.setPiece(whiteSquare, colorPiece(backrank[i], Color::White));
-
-			if (backrank[i] == PieceType::Rook)
-			{
-				if (firstRook)
-				{
-					state.castlingRooks.black().queenside = blackSquare;
-					state.castlingRooks.white().queenside = whiteSquare;
-				}
-				else
-				{
-					state.castlingRooks.black().kingside  = blackSquare;
-					state.castlingRooks.white().kingside  = whiteSquare;
-				}
-
-				firstRook = false;
-			}
 		}
 
 		m_blackToMove = false;
@@ -601,9 +440,6 @@ namespace oranj
 		const auto blackBackrank = scharnaglToBackrank(n / 960);
 		const auto whiteBackrank = scharnaglToBackrank(n % 960);
 
-		bool firstBlackRook = true;
-		bool firstWhiteRook = true;
-
 		for (i32 i = 0; i < 8; ++i)
 		{
 			const auto blackSquare = toSquare(7, i);
@@ -611,24 +447,6 @@ namespace oranj
 
 			state.boards.setPiece(blackSquare, colorPiece(blackBackrank[i], Color::Black));
 			state.boards.setPiece(whiteSquare, colorPiece(whiteBackrank[i], Color::White));
-
-			if (blackBackrank[i] == PieceType::Rook)
-			{
-				if (firstBlackRook)
-					state.castlingRooks.black().queenside = blackSquare;
-				else state.castlingRooks.black().kingside = blackSquare;
-
-				firstBlackRook = false;
-			}
-
-			if (whiteBackrank[i] == PieceType::Rook)
-			{
-				if (firstWhiteRook)
-					state.castlingRooks.white().queenside = whiteSquare;
-				else state.castlingRooks.white().kingside = whiteSquare;
-
-				firstWhiteRook = false;
-			}
 		}
 
 		m_blackToMove = false;
@@ -672,14 +490,7 @@ namespace oranj
 
 		state.keys.flipStm();
 
-		if (state.enPassant != Square::None)
-		{
-			state.keys.flipEp(state.enPassant);
-			state.enPassant = Square::None;
-		}
-
 		const auto stm = opponent();
-		const auto nstm = oppColor(stm);
 
 		if (stm == Color::Black)
 			++m_fullmove;
@@ -697,10 +508,7 @@ namespace oranj
 		const auto moveSrc = move.src();
 		const auto moveDst = move.dst();
 
-		auto newCastlingRooks = state.castlingRooks;
-
 		const auto moving = state.boards.pieceAt(moveSrc);
-		const auto movingType = pieceType(moving);
 
 		eval::NnueUpdates updates{};
 		auto captured = Piece::None;
@@ -711,13 +519,7 @@ namespace oranj
 			captured = movePiece<true, UpdateNnue>(moving, moveSrc, moveDst, updates);
 			break;
 		case MoveType::Promotion:
-			captured = promotePawn<true, UpdateNnue>(moving, moveSrc, moveDst, move.promo(), updates);
-			break;
-		case MoveType::Castling:
-			castle<true, UpdateNnue>(moving, moveSrc, moveDst, updates);
-			break;
-		case MoveType::EnPassant:
-			captured = enPassant<true, UpdateNnue>(moving, moveSrc, moveDst, updates);
+			captured = promotePawn<true, UpdateNnue>(moving, moveSrc, moveDst, updates);
 			break;
 		}
 
@@ -726,40 +528,14 @@ namespace oranj
 		if constexpr (UpdateNnue)
 			nnueState->pushUpdates<!StateHistory>(updates, state.boards.bbs(), state.kings);
 
-		if (movingType == PieceType::Rook)
-			newCastlingRooks.color(stm).unset(moveSrc);
-		else if (movingType == PieceType::King)
-			newCastlingRooks.color(stm).clear();
-		else if (moving == Piece::BlackPawn && move.srcRank() == 6 && move.dstRank() == 4)
-		{
-			state.enPassant = toSquare(5, move.srcFile());
-			state.keys.flipEp(state.enPassant);
-		}
-		else if (moving == Piece::WhitePawn && move.srcRank() == 1 && move.dstRank() == 3)
-		{
-			state.enPassant = toSquare(2, move.srcFile());
-			state.keys.flipEp(state.enPassant);
-		}
-
 		if (captured == Piece::None
 			&& pieceType(moving) != PieceType::Pawn)
 			++state.halfmove;
 		else state.halfmove = 0;
 
-		if (captured != Piece::None && pieceType(captured) == PieceType::Rook)
-			newCastlingRooks.color(nstm).unset(moveDst);
-
-		if (newCastlingRooks != state.castlingRooks)
-		{
-			state.keys.switchCastling(state.castlingRooks, newCastlingRooks);
-			state.castlingRooks = newCastlingRooks;
-		}
-
 		state.checkers = calcCheckers();
 		state.pinned = calcPinned();
 		state.threats = calcThreats();
-
-		filterEp(state, nstm);
 	}
 
 	template <bool UpdateNnue>
@@ -803,17 +579,13 @@ namespace oranj
 		if (srcPiece == Piece::None || pieceColor(srcPiece) != us)
 			return false;
 
-		const auto type = move.type();
-
 		const auto dst = move.dst();
 		const auto dstPiece = state.boards.pieceAt(dst);
 
 		// we're capturing something
 		if (dstPiece != Piece::None
-			// we're capturing our own piece    and either not castling
-			&& ((pieceColor(dstPiece) == us && (type != MoveType::Castling
-					// or trying to castle with a non-rook
-					|| dstPiece != colorPiece(PieceType::Rook, us)))
+			// we're capturing our own piece
+			&& (pieceColor(dstPiece) == us
 				// or trying to capture a king
 				|| pieceType(dstPiece) == PieceType::King))
 			return false;
@@ -822,72 +594,8 @@ namespace oranj
 		const auto them = oppColor(us);
 		const auto occ = state.boards.bbs().occupancy();
 
-		if (type == MoveType::Castling)
-		{
-			if (srcPieceType != PieceType::King || isCheck())
-				return false;
-
-			const auto homeRank = relativeRank(us, 0);
-
-			// wrong rank
-			if (move.srcRank() != homeRank || move.dstRank() != homeRank)
-				return false;
-
-			const auto rank = squareRank(src);
-
-			Square kingDst, rookDst;
-
-			if (squareFile(src) < squareFile(dst))
-			{
-				// no castling rights
-				if (dst != state.castlingRooks.color(us).kingside)
-					return false;
-
-				kingDst = toSquare(rank, 6);
-				rookDst = toSquare(rank, 5);
-			}
-			else
-			{
-				// no castling rights
-				if (dst != state.castlingRooks.color(us).queenside)
-					return false;
-
-				kingDst = toSquare(rank, 2);
-				rookDst = toSquare(rank, 3);
-			}
-
-			// same checks as for movegen
-			if (g_opts.chess960)
-			{
-				const auto toKingDst = rayBetween(src, kingDst);
-				const auto toRook = rayBetween(src, dst);
-
-				const auto castleOcc = occ ^ squareBit(src) ^ squareBit(dst);
-
-				return (castleOcc & (toKingDst | toRook | squareBit(kingDst) | squareBit(rookDst))).empty()
-					&& !anyAttacked(toKingDst | squareBit(kingDst), them);
-			}
-			else
-			{
-				if (dst == state.castlingRooks.black().kingside)
-					return (occ & U64(0x6000000000000000)).empty()
-						&& !isAttacked(Square::F8, Color::White);
-				else if (dst == state.castlingRooks.black().queenside)
-					return (occ & U64(0x0E00000000000000)).empty()
-						&& !isAttacked(Square::D8, Color::White);
-				else if (dst == state.castlingRooks.white().kingside)
-					return (occ & U64(0x0000000000000060)).empty()
-						&& !isAttacked(Square::F1, Color::Black);
-				else return (occ & U64(0x000000000000000E)).empty()
-						&& !isAttacked(Square::D1, Color::Black);
-			}
-		}
-
 		if (srcPieceType == PieceType::Pawn)
 		{
-			if (type == MoveType::EnPassant)
-				return dst == state.enPassant && attacks::getPawnAttacks(state.enPassant, them)[src];
-
 			const auto srcRank = move.srcRank();
 			const auto dstRank = move.dstRank();
 
@@ -899,7 +607,7 @@ namespace oranj
 			const auto promoRank = relativeRank(us, 7);
 
 			// non-promotion move to back rank, or promotion move to any other rank
-			if ((type == MoveType::Promotion) != (dstRank == promoRank))
+			if (move.isPromo() != (dstRank == promoRank))
 				return false;
 
 			// sideways move
@@ -913,33 +621,22 @@ namespace oranj
 			else if (dstPiece != Piece::None)
 				return false;
 
-			const auto delta = std::abs(dstRank - srcRank);
-
-			i32 maxDelta;
-			if (us == Color::Black)
-				maxDelta = srcRank == 6 ? 2 : 1;
-			else maxDelta = srcRank == 1 ? 2 : 1;
-
-			if (delta > maxDelta)
-				return false;
-
-			if (delta == 2
-				&& occ[static_cast<Square>(static_cast<i32>(dst) + (us == Color::White ? offsets::Down : offsets::Up))])
+			if (std::abs(dstRank - srcRank) > 1)
 				return false;
 		}
 		else
 		{
-			if (type == MoveType::Promotion || type == MoveType::EnPassant)
+			if (move.isPromo())
 				return false;
 
 			Bitboard attacks{};
 
 			switch (srcPieceType)
 			{
+			case PieceType:: Alfil: attacks = attacks::getAlfilAttacks(src); break;
+			case PieceType::  Ferz: attacks = attacks::getFerzAttacks(src); break;
 			case PieceType::Knight: attacks = attacks::getKnightAttacks(src); break;
-			case PieceType::Bishop: attacks = attacks::getBishopAttacks(src, occ); break;
 			case PieceType::  Rook: attacks = attacks::getRookAttacks(src, occ); break;
-			case PieceType:: Queen: attacks = attacks::getQueenAttacks(src, occ); break;
 			case PieceType::  King: attacks = attacks::getKingAttacks(src); break;
 			default: __builtin_unreachable();
 			}
@@ -967,53 +664,26 @@ namespace oranj
 
 		const auto king = state.kings.color(us);
 
-		if (move.type() == MoveType::Castling)
-		{
-			const auto kingDst = toSquare(move.srcRank(), move.srcFile() < move.dstFile() ? 6 : 2);
-			return !state.threats[kingDst] && !(g_opts.chess960 && state.pinned[dst]);
-		}
-		else if (move.type() == MoveType::EnPassant)
-		{
-			auto rank = squareRank(dst);
-			const auto file = squareFile(dst);
-
-			rank = rank == 2 ? 3 : 4;
-
-			const auto captureSquare = toSquare(rank, file);
-
-			const auto postEpOcc = bbs.occupancy()
-				^ Bitboard::fromSquare(src)
-				^ Bitboard::fromSquare(dst)
-				^ Bitboard::fromSquare(captureSquare);
-
-			const auto theirQueens = bbs.queens(them);
-
-			return (attacks::getBishopAttacks(king, postEpOcc) & (theirQueens | bbs.bishops(them))).empty()
-				&& (attacks::getRookAttacks  (king, postEpOcc) & (theirQueens | bbs.  rooks(them))).empty();
-		}
-
 		const auto moving = state.boards.pieceAt(src);
 
 		if (pieceType(moving) == PieceType::King)
 		{
 			const auto kinglessOcc = bbs.occupancy() ^ bbs.kings(us);
-			const auto theirQueens = bbs.queens(them);
 
 			return !state.threats[move.dst()]
-				&& (attacks::getBishopAttacks(dst, kinglessOcc) & (theirQueens | bbs.bishops(them))).empty()
-				&& (attacks::getRookAttacks  (dst, kinglessOcc) & (theirQueens | bbs.  rooks(them))).empty();
+				&& (attacks::getRookAttacks(dst, kinglessOcc) & bbs.rooks(them)).empty();
 		}
 
 		// multiple checks can only be evaded with a king move
 		if (state.checkers.multiple()
-			|| state.pinned[src] && !rayIntersecting(src, dst)[king])
+			|| state.pinned[src] && !orthoRayIntersecting(src, dst)[king])
 			return false;
 
 		if (state.checkers.empty())
 			return true;
 
 		const auto checker = state.checkers.lowestSquare();
-		return (rayBetween(king, checker) | Bitboard::fromSquare(checker))[dst];
+		return (orthoRayBetween(king, checker) | Bitboard::fromSquare(checker))[dst];
 	}
 
 	// see comment in cuckoo.cpp
@@ -1056,7 +726,7 @@ namespace oranj
 
 			const auto move = cuckoo::moves[slot];
 
-			if ((occ & rayBetween(move.src(), move.dst())).empty())
+			if ((occ & orthoRayBetween(move.src(), move.dst())).empty())
 			{
 				// repetition is after root, done
 				if (ply > d)
@@ -1109,23 +779,11 @@ namespace oranj
 
 		const auto &bbs = this->bbs();
 
-		if (!bbs.pawns().empty() || !bbs.majors().empty())
-			return false;
-
 		// KK
-		if (bbs.nonPk().empty())
+		if (bbs.occupancy() == bbs.kings())
 			return true;
 
-		// KNK or KBK
-		if ((bbs.blackNonPk().empty() && bbs.whiteNonPk() == bbs.whiteMinors() && !bbs.whiteMinors().multiple())
-			|| (bbs.whiteNonPk().empty() && bbs.blackNonPk() == bbs.blackMinors() && !bbs.blackMinors().multiple()))
-			return true;
-
-		// KBKB OCB
-		if ((bbs.blackNonPk() == bbs.blackBishops() && bbs.whiteNonPk() == bbs.whiteBishops())
-			&& !bbs.blackBishops().multiple() && !bbs.whiteBishops().multiple()
-			&& (bbs.blackBishops() & boards::LightSquares).empty() != (bbs.whiteBishops() & boards::LightSquares).empty())
-			return true;
+		//TODO more?
 
 		return false;
 	}
@@ -1156,37 +814,7 @@ namespace oranj
 
 		fen << (toMove() == Color::White ? " w " : " b ");
 
-		if (state.castlingRooks == CastlingRooks{})
-			fen << '-';
-		else if (g_opts.chess960)
-		{
-			constexpr auto BlackFiles = std::array{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'};
-			constexpr auto WhiteFiles = std::array{'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'};
-
-			if (state.castlingRooks.white().kingside != Square::None)
-				fen << WhiteFiles[squareFile(state.castlingRooks.white().kingside)];
-			if (state.castlingRooks.white().queenside != Square::None)
-				fen << WhiteFiles[squareFile(state.castlingRooks.white().queenside)];
-			if (state.castlingRooks.black().kingside != Square::None)
-				fen << BlackFiles[squareFile(state.castlingRooks.black().kingside)];
-			if (state.castlingRooks.black().queenside != Square::None)
-				fen << BlackFiles[squareFile(state.castlingRooks.black().queenside)];
-		}
-		else
-		{
-			if (state.castlingRooks.white().kingside  != Square::None)
-				fen << 'K';
-			if (state.castlingRooks.white().queenside != Square::None)
-				fen << 'Q';
-			if (state.castlingRooks.black().kingside  != Square::None)
-				fen << 'k';
-			if (state.castlingRooks.black().queenside != Square::None)
-				fen << 'q';
-		}
-
-		if (state.enPassant != Square::None)
-			fen << ' ' << squareToString(state.enPassant);
-		else fen << " -";
+		fen << " - -";
 
 		fen << ' ' << state.halfmove;
 		fen << ' ' << m_fullmove;
@@ -1306,8 +934,7 @@ namespace oranj
 	}
 
 	template <bool UpdateKey, bool UpdateNnue>
-	auto Position::promotePawn(Piece pawn, Square src, Square dst,
-		PieceType promo, eval::NnueUpdates &nnueUpdates) -> Piece
+	auto Position::promotePawn(Piece pawn, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece
 	{
 		assert(pawn != Piece::None);
 		assert(pieceType(pawn) == PieceType::Pawn);
@@ -1318,8 +945,6 @@ namespace oranj
 
 		assert(squareRank(dst) == relativeRank(pieceColor(pawn), 7));
 		assert(squareRank(src) == relativeRank(pieceColor(pawn), 6));
-
-		assert(promo != PieceType::None);
 
 		auto &state = currState();
 
@@ -1338,109 +963,26 @@ namespace oranj
 				state.keys.flipPiece(captured, dst);
 		}
 
-		state.boards.moveAndChangePiece(src, dst, pawn, promo);
+		state.boards.moveAndChangePiece(src, dst, pawn, PieceType::Ferz);
 
 		if constexpr(UpdateNnue || UpdateKey)
 		{
-			const auto coloredPromo = copyPieceColor(pawn, promo);
+			const auto coloredFerz = copyPieceColor(pawn, PieceType::Ferz);
 
 			if constexpr (UpdateNnue)
 			{
 				nnueUpdates.pushSub(pawn, src);
-				nnueUpdates.pushAdd(coloredPromo, dst);
+				nnueUpdates.pushAdd(coloredFerz, dst);
 			}
 
 			if constexpr (UpdateKey)
 			{
 				state.keys.flipPiece(pawn, src);
-				state.keys.flipPiece(coloredPromo, dst);
+				state.keys.flipPiece(coloredFerz, dst);
 			}
 		}
 
 		return captured;
-	}
-
-	template <bool UpdateKey, bool UpdateNnue>
-	auto Position::castle(Piece king, Square kingSrc, Square rookSrc, eval::NnueUpdates &nnueUpdates) -> void
-	{
-		assert(king != Piece::None);
-		assert(pieceType(king) == PieceType::King);
-
-		assert(kingSrc != Square::None);
-		assert(rookSrc != Square::None);
-		assert(kingSrc != rookSrc);
-
-		const auto rank = squareRank(kingSrc);
-
-		Square kingDst, rookDst;
-
-		if (squareFile(kingSrc) < squareFile(rookSrc))
-		{
-			// short
-			kingDst = toSquare(rank, 6);
-			rookDst = toSquare(rank, 5);
-		}
-		else
-		{
-			// long
-			kingDst = toSquare(rank, 2);
-			rookDst = toSquare(rank, 3);
-		}
-
-		const auto rook = copyPieceColor(king, PieceType::Rook);
-
-		movePieceNoCap<UpdateKey>(king, kingSrc, kingDst);
-		movePieceNoCap<UpdateKey>(rook, rookSrc, rookDst);
-
-		if constexpr (UpdateNnue)
-		{
-			const auto color = pieceColor(king);
-
-			if (eval::InputFeatureSet::refreshRequired(color, kingSrc, kingDst))
-				nnueUpdates.setRefresh(color);
-
-			nnueUpdates.pushSubAdd(king, kingSrc, kingDst);
-			nnueUpdates.pushSubAdd(rook, rookSrc, rookDst);
-		}
-	}
-
-	template <bool UpdateKey, bool UpdateNnue>
-	auto Position::enPassant(Piece pawn, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece
-	{
-		assert(pawn != Piece::None);
-		assert(pieceType(pawn) == PieceType::Pawn);
-
-		assert(src != Square::None);
-		assert(dst != Square::None);
-		assert(src != dst);
-
-		auto &state = currState();
-
-		state.boards.movePiece(src, dst, pawn);
-
-		if constexpr (UpdateNnue)
-			nnueUpdates.pushSubAdd(pawn, src, dst);
-
-		if constexpr (UpdateKey)
-			state.keys.movePiece(pawn, src, dst);
-
-		auto rank = squareRank(dst);
-		const auto file = squareFile(dst);
-
-		rank = rank == 2 ? 3 : 4;
-
-		const auto captureSquare = toSquare(rank, file);
-		const auto enemyPawn = flipPieceColor(pawn);
-
-		state.boards.removePiece(captureSquare, enemyPawn);
-
-		if constexpr (UpdateNnue)
-			nnueUpdates.pushSub(enemyPawn, captureSquare);
-
-		if constexpr (UpdateKey)
-			state.keys.flipPiece(enemyPawn, captureSquare);
-
-		return enemyPawn;
 	}
 
 	auto Position::regen() -> void
@@ -1466,87 +1008,12 @@ namespace oranj
 			}
 		}
 
-		state.keys.flipCastling(state.castlingRooks);
-		state.keys.flipEp(state.enPassant);
-
 		if (toMove() == Color::Black)
 			state.keys.flipStm();
 
 		state.checkers = calcCheckers();
 		state.pinned = calcPinned();
 		state.threats = calcThreats();
-
-		filterEp(state, toMove());
-	}
-
-	void Position::filterEp(BoardState &state, Color capturing)
-	{
-		if (state.enPassant == Square::None)
-			return;
-
-		const auto unset = [&]
-		{
-			state.keys.flipEp(state.enPassant);
-			state.enPassant = Square::None;
-		};
-
-		const auto &bbs = state.boards.bbs();
-
-		const auto moved = oppColor(capturing);
-
-		const auto king = state.kings.color(capturing);
-
-		const auto candidates = bbs.pawns(capturing) & attacks::getPawnAttacks(state.enPassant, moved);
-		const auto vertPinned = state.pinned & boards::Files[squareFile(king)];
-
-		// vertically pinned pawns cannot capture at all
-		const auto pawns = candidates & ~vertPinned;
-
-		if (!pawns)
-		{
-			unset();
-			return;
-		}
-
-		// if there are multiple pawns available, they can't both be
-		// pinned and neither capture can result in a discovered check
-		if (candidates.multiple())
-			return;
-
-		const auto diagPinned = pawns & state.pinned;
-
-		// if the capturing pawn is pinned, it has to be pinned
-		// along the same diagonal that the capture would occur
-		if (diagPinned)
-		{
-			const auto pinnedPawn = diagPinned.lowestSquare();
-			const auto pinRay = attacks::getBishopAttacks(king, bbs.occupancy(moved))
-				& rayIntersecting(king, pinnedPawn);
-
-			if (!pinRay[state.enPassant])
-			{
-				unset();
-				return;
-			}
-		}
-
-		// also handle the annoying case where capturing en passant would cause discovered check
-		const auto movedPawn = toSquare(squareRank(state.enPassant)
-			+ (moved == Color::White ? 1 : -1), squareFile(state.enPassant));
-		const auto capturingPawn = candidates.lowestSquare();
-
-		const auto rank = rayIntersecting(movedPawn, capturingPawn);
-		const auto oppRookCandidates = rank & (bbs.rooks(moved) | bbs.queens(moved));
-
-		// not possible :3
-		if (!rank[king] || !oppRookCandidates)
-			return;
-
-		const auto pawnlessOcc = bbs.occupancy() ^ squareBit(movedPawn) ^ squareBit(capturingPawn);
-		const auto attacks = attacks::getRookAttacks(king, pawnlessOcc);
-
-		if (attacks & oppRookCandidates)
-			unset();
 	}
 
 	auto Position::moveFromUci(const std::string &move) const -> Move
@@ -1554,38 +1021,20 @@ namespace oranj
 		if (move.length() < 4 || move.length() > 5)
 			return NullMove;
 
+		if (move.length() == 5 && move[4] != 'q')
+			return NullMove;
+
 		const auto src = squareFromString(move.substr(0, 2));
 		const auto dst = squareFromString(move.substr(2, 2));
 
-		if (move.length() == 5)
-			return Move::promotion(src, dst, pieceTypeFromChar(move[4]));
-		else
-		{
-			const auto &state = currState();
+		const auto &state = currState();
 
-			const auto srcPiece = state.boards.pieceAt(src);
+		const auto srcPiece = pieceType(state.boards.pieceAt(src));
+		const auto promoRank = relativeRank(toMove(), 7);
 
-			if (srcPiece == Piece::BlackKing || srcPiece == Piece::WhiteKing)
-			{
-				if (g_opts.chess960)
-				{
-					if (state.boards.pieceAt(dst) == copyPieceColor(srcPiece, PieceType::Rook))
-						return Move::castling(src, dst);
-					else return Move::standard(src, dst);
-				}
-				else if (std::abs(squareFile(src) - squareFile(dst)) == 2)
-				{
-					const auto rookFile = squareFile(src) < squareFile(dst) ? 7 : 0;
-					return Move::castling(src, toSquare(squareRank(src), rookFile));
-				}
-			}
-
-			if ((srcPiece == Piece::BlackPawn || srcPiece == Piece::WhitePawn)
-				&& dst == state.enPassant)
-				return Move::enPassant(src, dst);
-
-			return Move::standard(src, dst);
-		}
+		return (srcPiece == PieceType::Pawn && squareRank(dst) == promoRank)
+			? Move::promotion(src, dst)
+			: Move:: standard(src, dst);
 	}
 
 	auto Position::starting() -> Position

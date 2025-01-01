@@ -33,8 +33,6 @@ namespace oranj
 	{
 		Standard = 0,
 		Promotion,
-		Castling,
-		EnPassant
 	};
 
 	class Move
@@ -55,25 +53,12 @@ namespace oranj
 		[[nodiscard]] constexpr auto dstRank() const { return (m_move >> 7) & 0x7; }
 		[[nodiscard]] constexpr auto dstFile() const { return (m_move >> 4) & 0x7; }
 
-		[[nodiscard]] constexpr auto promoIdx() const { return (m_move >> 2) & 0x3; }
-		[[nodiscard]] constexpr auto promo() const { return static_cast<PieceType>(promoIdx() + 1); }
-
 		[[nodiscard]] constexpr auto type() const { return static_cast<MoveType>(m_move & 0x3); }
+		[[nodiscard]] constexpr auto isPromo() const { return type() == MoveType::Promotion; }
 
-		[[nodiscard]] constexpr auto isNull() const { return /*src() == dst()*/ m_move == 0; }
+		[[nodiscard]] constexpr auto isNull() const { return m_move == 0; }
 
 		[[nodiscard]] constexpr auto data() const { return m_move; }
-
-		// returns the king's actual destination square for non-FRC
-		// castling moves, otherwise just the move's destination
-		// used to avoid inflating the history of the generally
-		// bad moves of putting the king in a corner when castling
-		[[nodiscard]] constexpr auto historyDst() const
-		{
-			if (type() == MoveType::Castling && !g_opts.chess960)
-				return toSquare(srcRank(), srcFile() < dstFile() ? 6 : 2);
-			else return dst();
-		}
 
 		[[nodiscard]] explicit constexpr operator bool() const { return !isNull(); }
 
@@ -88,31 +73,12 @@ namespace oranj
 			)};
 		}
 
-		[[nodiscard]] static constexpr auto promotion(Square src, Square dst, PieceType promo)
+		[[nodiscard]] static constexpr auto promotion(Square src, Square dst)
 		{
 			return Move{static_cast<u16>(
 				(static_cast<u16>(src) << 10)
 				| (static_cast<u16>(dst) << 4)
-				| ((static_cast<u16>(promo) - 1) << 2)
 				| static_cast<u16>(MoveType::Promotion)
-			)};
-		}
-
-		[[nodiscard]] static constexpr auto castling(Square src, Square dst)
-		{
-			return Move{static_cast<u16>(
-				(static_cast<u16>(src) << 10)
-				| (static_cast<u16>(dst) << 4)
-				| static_cast<u16>(MoveType::Castling)
-			)};
-		}
-
-		[[nodiscard]] static constexpr auto enPassant(Square src, Square dst)
-		{
-			return Move{static_cast<u16>(
-				(static_cast<u16>(src) << 10)
-				| (static_cast<u16>(dst) << 4)
-				| static_cast<u16>(MoveType::EnPassant)
 			)};
 		}
 

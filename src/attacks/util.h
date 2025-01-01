@@ -34,14 +34,10 @@ namespace oranj::attacks
 		{
 			switch (dir)
 			{
-			case offsets::       Up: return boards::Rank8                ;
-			case offsets::     Down: return boards::Rank1                ;
-			case offsets::     Left: return boards::FileA                ;
-			case offsets::    Right: return boards::FileH                ;
-			case offsets::   UpLeft: return boards::FileA | boards::Rank8;
-			case offsets::  UpRight: return boards::FileH | boards::Rank8;
-			case offsets:: DownLeft: return boards::FileA | boards::Rank1;
-			case offsets::DownRight: return boards::FileH | boards::Rank1;
+			case offsets::       Up: return boards::Rank8;
+			case offsets::     Down: return boards::Rank1;
+			case offsets::     Left: return boards::FileA;
+			case offsets::    Right: return boards::FileH;
 			default: __builtin_unreachable(); // don't
 			}
 		}
@@ -73,14 +69,18 @@ namespace oranj::attacks
 		}
 	}
 
-	template <i32 ...Dirs>
-	consteval auto generateEmptyBoardAttacks()
+	constexpr auto EmptyBoardRooks = []
 	{
 		std::array<Bitboard, 64> dst{};
 
 		for (i32 square = 0; square < 64; ++square)
 		{
-			for (const auto dir : {Dirs...})
+			for (const auto dir : {
+				offsets::Up,
+				offsets::Down,
+				offsets::Left,
+				offsets::Right
+			})
 			{
 				const auto attacks = internal::generateSlidingAttacks(static_cast<Square>(square), dir, 0);
 				dst[square] |= attacks;
@@ -88,43 +88,22 @@ namespace oranj::attacks
 		}
 
 		return dst;
-	}
+	}();
 
-	constexpr auto EmptyBoardRooks
-		= generateEmptyBoardAttacks<offsets::Up, offsets::Down, offsets::Left, offsets::Right>();
-	constexpr auto EmptyBoardBishops
-		= generateEmptyBoardAttacks<offsets::UpLeft, offsets::UpRight, offsets::DownLeft, offsets::DownRight>();
-
-	template <i32 ...Dirs>
-	consteval auto genAllSlidingAttacks(Square src, Bitboard occupancy)
+	consteval auto genRookAttacks(Square src, Bitboard occupancy)
 	{
 		Bitboard dst{};
 
-		for (const auto dir : {Dirs...})
+		for (const auto dir : {
+			offsets::Up,
+			offsets::Down,
+			offsets::Left,
+			offsets::Right
+		})
 		{
 			dst |= internal::generateSlidingAttacks(src, dir, occupancy);
 		}
 
 		return dst;
-	}
-
-	consteval auto genRookAttacks(Square src, Bitboard occupancy)
-	{
-		return genAllSlidingAttacks<
-			offsets::Up,
-			offsets::Down,
-			offsets::Left,
-			offsets::Right
-		>(src, occupancy);
-	}
-
-	consteval auto genBishopAttacks(Square src, Bitboard occupancy)
-	{
-		return genAllSlidingAttacks<
-			offsets::UpLeft,
-			offsets::UpRight,
-			offsets::DownLeft,
-			offsets::DownRight
-		>(src, occupancy);
 	}
 }

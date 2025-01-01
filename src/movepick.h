@@ -365,7 +365,7 @@ namespace oranj
 			score += see::value(captured);
 
 			if (move.type() == MoveType::Promotion)
-				score += see::value(PieceType::Queen) - see::value(PieceType::Pawn);
+				score += see::value(PieceType::Ferz) - see::value(PieceType::Pawn);
 		}
 
 		inline auto scoreNoisies() -> void

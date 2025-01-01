@@ -31,24 +31,24 @@ namespace oranj::see
 	namespace values
 	{
 		constexpr Score Pawn = 100;
-		constexpr Score Knight = 450;
-		constexpr Score Bishop = 450;
-		constexpr Score Rook = 650;
-		constexpr Score Queen = 1250;
+		constexpr Score Alfil = 125;
+		constexpr Score Ferz = 160;
+		constexpr Score Knight = 330;
+		constexpr Score Rook = 500;
 		constexpr Score King = 0;
 	}
 
 	constexpr auto Values = std::array {
 		values::Pawn,
 		values::Pawn,
+		values::Alfil,
+		values::Alfil,
+		values::Ferz,
+		values::Ferz,
 		values::Knight,
 		values::Knight,
-		values::Bishop,
-		values::Bishop,
 		values::Rook,
 		values::Rook,
-		values::Queen,
-		values::Queen,
 		values::King,
 		values::King,
 		static_cast<Score>(0)
@@ -66,17 +66,10 @@ namespace oranj::see
 
 	inline auto gain(const PositionBoards &boards, Move move)
 	{
-		const auto type = move.type();
-
-		if (type == MoveType::Castling)
-			return 0;
-		else if (type == MoveType::EnPassant)
-			return values::Pawn;
-
 		auto score = value(boards.pieceAt(move.dst()));
 
-		if (type == MoveType::Promotion)
-			score += value(move.promo()) - values::Pawn;
+		if (move.isPromo())
+			score += values::Ferz - values::Pawn;
 
 		return score;
 	}
@@ -112,8 +105,8 @@ namespace oranj::see
 		if (score < 0)
 			return false;
 
-		auto next = move.type() == MoveType::Promotion
-			? move.promo()
+		auto next = move.isPromo()
+			? PieceType::Ferz
 			: pieceType(boards.pieceAt(move.src()));
 
 		score -= value(next);
@@ -127,10 +120,7 @@ namespace oranj::see
 			^ squareBit(move.src())
 			^ squareBit(square);
 
-		const auto queens = bbs.queens();
-
-		const auto bishops = queens | bbs.bishops();
-		const auto rooks = queens | bbs.rooks();
+		const auto rooks = bbs.rooks();
 
 		auto attackers = pos.allAttackersTo(square, occupancy);
 
@@ -145,13 +135,7 @@ namespace oranj::see
 
 			next = popLeastValuable(bbs, occupancy, ourAttackers, us);
 
-			if (next == PieceType::Pawn
-				|| next == PieceType::Bishop
-				|| next == PieceType::Queen)
-				attackers |= attacks::getBishopAttacks(square, occupancy) & bishops;
-
-			if (next == PieceType::Rook
-				|| next == PieceType::Queen)
+			if (next == PieceType::Rook)
 				attackers |= attacks::getRookAttacks(square, occupancy) & rooks;
 
 			attackers &= occupancy;

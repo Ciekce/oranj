@@ -80,33 +80,33 @@ namespace oranj
 		[[nodiscard]] inline auto occupancy() const { return m_colors[0] | m_colors[1]; }
 
 		[[nodiscard]] inline auto pawns() const { return forPiece(PieceType::Pawn); }
+		[[nodiscard]] inline auto alfils() const { return forPiece(PieceType::Alfil); }
+		[[nodiscard]] inline auto ferzes() const { return forPiece(PieceType::Ferz); }
 		[[nodiscard]] inline auto knights() const { return forPiece(PieceType::Knight); }
-		[[nodiscard]] inline auto bishops() const { return forPiece(PieceType::Bishop); }
 		[[nodiscard]] inline auto rooks() const { return forPiece(PieceType::Rook); }
-		[[nodiscard]] inline auto queens() const { return forPiece(PieceType::Queen); }
 		[[nodiscard]] inline auto kings() const { return forPiece(PieceType::King); }
 
 		[[nodiscard]] inline auto blackPawns() const { return pawns() & blackOccupancy(); }
 		[[nodiscard]] inline auto whitePawns() const { return pawns() & whiteOccupancy(); }
 
+		[[nodiscard]] inline auto blackAlfils() const { return alfils() & blackOccupancy(); }
+		[[nodiscard]] inline auto whiteAlfils() const { return alfils() & whiteOccupancy(); }
+
+		[[nodiscard]] inline auto blackFerzes() const { return ferzes() & blackOccupancy(); }
+		[[nodiscard]] inline auto whiteFerzes() const { return ferzes() & whiteOccupancy(); }
+
 		[[nodiscard]] inline auto blackKnights() const { return knights() & blackOccupancy(); }
 		[[nodiscard]] inline auto whiteKnights() const { return knights() & whiteOccupancy(); }
 
-		[[nodiscard]] inline auto blackBishops() const { return bishops() & blackOccupancy(); }
-		[[nodiscard]] inline auto whiteBishops() const { return bishops() & whiteOccupancy(); }
-
 		[[nodiscard]] inline auto blackRooks() const { return rooks() & blackOccupancy(); }
 		[[nodiscard]] inline auto whiteRooks() const { return rooks() & whiteOccupancy(); }
-
-		[[nodiscard]] inline auto blackQueens() const { return queens() & blackOccupancy(); }
-		[[nodiscard]] inline auto whiteQueens() const { return queens() & whiteOccupancy(); }
 
 		[[nodiscard]] inline auto blackKings() const { return kings() & blackOccupancy(); }
 		[[nodiscard]] inline auto whiteKings() const { return kings() & whiteOccupancy(); }
 
 		[[nodiscard]] inline auto minors() const
 		{
-			return knights() | bishops();
+			return alfils() | ferzes() | knights();
 		}
 
 		[[nodiscard]] inline auto blackMinors() const
@@ -121,7 +121,7 @@ namespace oranj
 
 		[[nodiscard]] inline auto majors() const
 		{
-			return rooks() | queens();
+			return rooks();
 		}
 
 		[[nodiscard]] inline auto blackMajors() const
@@ -158,6 +158,22 @@ namespace oranj
 		}
 
 		template <Color C>
+		[[nodiscard]] inline auto alfils() const
+		{
+			if constexpr (C == Color::Black)
+				return blackAlfils();
+			else return whiteAlfils();
+		}
+
+		template <Color C>
+		[[nodiscard]] inline auto ferzes() const
+		{
+			if constexpr (C == Color::Black)
+				return blackFerzes();
+			else return whiteFerzes();
+		}
+
+		template <Color C>
 		[[nodiscard]] inline auto knights() const
 		{
 			if constexpr (C == Color::Black)
@@ -166,27 +182,11 @@ namespace oranj
 		}
 
 		template <Color C>
-		[[nodiscard]] inline auto bishops() const
-		{
-			if constexpr (C == Color::Black)
-				return blackBishops();
-			else return whiteBishops();
-		}
-
-		template <Color C>
 		[[nodiscard]] inline auto rooks() const
 		{
 			if constexpr (C == Color::Black)
 				return blackRooks();
 			else return whiteRooks();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto queens() const
-		{
-			if constexpr (C == Color::Black)
-				return blackQueens();
-			else return whiteQueens();
 		}
 
 		template <Color C>
@@ -226,24 +226,24 @@ namespace oranj
 			return forPiece(PieceType::Pawn, color);
 		}
 
+		[[nodiscard]] inline auto alfils(Color color) const
+		{
+			return forPiece(PieceType::Alfil, color);
+		}
+
+		[[nodiscard]] inline auto ferzes(Color color) const
+		{
+			return forPiece(PieceType::Ferz, color);
+		}
+
 		[[nodiscard]] inline auto knights(Color color) const
 		{
 			return forPiece(PieceType::Knight, color);
 		}
 
-		[[nodiscard]] inline auto bishops(Color color) const
-		{
-			return forPiece(PieceType::Bishop, color);
-		}
-
 		[[nodiscard]] inline auto rooks(Color color) const
 		{
 			return forPiece(PieceType::Rook, color);
-		}
-
-		[[nodiscard]] inline auto queens(Color color) const
-		{
-			return forPiece(PieceType::Queen, color);
 		}
 
 		[[nodiscard]] inline auto kings(Color color) const

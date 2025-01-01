@@ -30,8 +30,7 @@
 
 namespace oranj::attacks
 {
-	extern const std::array<Bitboard, black_magic::  RookData.tableSize>   RookAttacks;
-	extern const std::array<Bitboard, black_magic::BishopData.tableSize> BishopAttacks;
+	extern const std::array<Bitboard, black_magic::RookData.tableSize> RookAttacks;
 
 	[[nodiscard]] inline auto getRookIdx(Bitboard occupancy, Square src)
 	{
@@ -39,20 +38,8 @@ namespace oranj::attacks
 
 		const auto &data = black_magic::RookData.data[s];
 
-		const auto magic = black_magic::RookMagics[s];
-		const auto shift = black_magic::RookShifts[s];
-
-		return ((occupancy | data.mask) * magic) >> shift;
-	}
-
-	[[nodiscard]] inline auto getBishopIdx(Bitboard occupancy, Square src)
-	{
-		const auto s = static_cast<i32>(src);
-
-		const auto &data = black_magic::BishopData.data[s];
-
-		const auto magic = black_magic::BishopMagics[s];
-		const auto shift = black_magic::BishopShifts[s];
+		const auto magic = black_magic::Magics[s];
+		const auto shift = black_magic::Shifts[s];
 
 		return ((occupancy | data.mask) * magic) >> shift;
 	}
@@ -65,15 +52,5 @@ namespace oranj::attacks
 		const auto idx = getRookIdx(occupancy, src);
 
 		return RookAttacks[data.offset + idx];
-	}
-
-	[[nodiscard]] inline auto getBishopAttacks(Square src, Bitboard occupancy)
-	{
-		const auto s = static_cast<i32>(src);
-
-		const auto &data = black_magic::BishopData.data[s];
-		const auto idx = getBishopIdx(occupancy, src);
-
-		return BishopAttacks[data.offset + idx];
 	}
 }

@@ -96,34 +96,6 @@ namespace oranj
 				majors ^= key;
 		}
 
-		inline auto flipEp(Square epSq)
-		{
-			const auto key = keys::enPassant(epSq);
-
-			all ^= key;
-			pawns ^= key;
-		}
-
-		inline auto flipCastling(const CastlingRooks &rooks)
-		{
-			const auto key = keys::castling(rooks);
-
-			all ^= key;
-			blackNonPawns ^= key;
-			whiteNonPawns ^= key;
-			majors ^= key;
-		}
-
-		inline auto switchCastling(const CastlingRooks &before, const CastlingRooks &after)
-		{
-			const auto key = keys::castling(before) ^ keys::castling(after);
-
-			all ^= key;
-			blackNonPawns ^= key;
-			whiteNonPawns ^= key;
-			majors ^= key;
-		}
-
 		[[nodiscard]] inline auto operator==(const Keys &other) const -> bool = default;
 	};
 
@@ -137,16 +109,12 @@ namespace oranj
 		Bitboard pinned{};
 		Bitboard threats{};
 
-		CastlingRooks castlingRooks{};
-
 		u16 halfmove{};
-
-		Square enPassant{Square::None};
 
 		KingPair kings{};
 	};
 
-	static_assert(sizeof(BoardState) == 208);
+	static_assert(sizeof(BoardState) == 200);
 
 	[[nodiscard]] inline auto squareToString(Square square)
 	{
@@ -236,10 +204,6 @@ namespace oranj
 			return m_blackToMove ? Color::White : Color::Black;
 		}
 
-		[[nodiscard]] inline auto castlingRooks() const -> const auto & { return currState().castlingRooks; }
-
-		[[nodiscard]] inline auto enPassant() const { return currState().enPassant; }
-
 		[[nodiscard]] inline auto halfmove() const { return currState().halfmove; }
 		[[nodiscard]] inline auto fullmove() const { return m_fullmove; }
 
@@ -281,19 +245,20 @@ namespace oranj
 
 			Bitboard attackers{};
 
-			const auto queens = bbs.queens();
-
-			const auto rooks = queens | bbs.rooks();
-			attackers |= rooks & attacks::getRookAttacks(square, occupancy);
-
-			const auto bishops = queens | bbs.bishops();
-			attackers |= bishops & attacks::getBishopAttacks(square, occupancy);
-
 			attackers |= bbs.blackPawns() & attacks::getPawnAttacks(square, Color::White);
 			attackers |= bbs.whitePawns() & attacks::getPawnAttacks(square, Color::Black);
 
+			const auto alfils = bbs.alfils();
+			attackers |= alfils & attacks::getAlfilAttacks(square);
+
+			const auto ferzes = bbs.ferzes();
+			attackers |= ferzes & attacks::getFerzAttacks(square);
+
 			const auto knights = bbs.knights();
 			attackers |= knights & attacks::getKnightAttacks(square);
+
+			const auto rooks = bbs.rooks();
+			attackers |= rooks & attacks::getRookAttacks(square, occupancy);
 
 			const auto kings = bbs.kings();
 			attackers |= kings & attacks::getKingAttacks(square);
@@ -311,19 +276,20 @@ namespace oranj
 
 			const auto occ = bbs.occupancy();
 
-			const auto queens = bbs.queens(attacker);
-
-			const auto rooks = queens | bbs.rooks(attacker);
-			attackers |= rooks & attacks::getRookAttacks(square, occ);
-
-			const auto bishops = queens | bbs.bishops(attacker);
-			attackers |= bishops & attacks::getBishopAttacks(square, occ);
-
 			const auto pawns = bbs.pawns(attacker);
 			attackers |= pawns & attacks::getPawnAttacks(square, oppColor(attacker));
 
+			const auto alfils = bbs.alfils(attacker);
+			attackers |= alfils & attacks::getAlfilAttacks(square);
+
+			const auto ferzes = bbs.ferzes(attacker);
+			attackers |= ferzes & attacks::getFerzAttacks(square);
+
 			const auto knights = bbs.knights(attacker);
 			attackers |= knights & attacks::getKnightAttacks(square);
+
+			const auto rooks = bbs.rooks(attacker);
+			attackers |= rooks & attacks::getRookAttacks(square, occ);
 
 			const auto kings = bbs.kings(attacker);
 			attackers |= kings & attacks::getKingAttacks(square);
@@ -353,6 +319,14 @@ namespace oranj
 				!(knights & attacks::getKnightAttacks(square)).empty())
 				return true;
 
+			if (const auto alfils = bbs.alfils(attacker);
+				!(alfils & attacks::getAlfilAttacks(square)).empty())
+				return true;
+
+			if (const auto ferzes = bbs.ferzes(attacker);
+				!(ferzes & attacks::getFerzAttacks(square)).empty())
+				return true;
+
 			if (const auto pawns = bbs.pawns(attacker);
 				!(pawns & attacks::getPawnAttacks(square, oppColor(attacker))).empty())
 				return true;
@@ -361,13 +335,7 @@ namespace oranj
 				!(kings & attacks::getKingAttacks(square)).empty())
 				return true;
 
-			const auto queens = bbs.queens(attacker);
-
-			if (const auto bishops = queens | bbs.bishops(attacker);
-				!(bishops & attacks::getBishopAttacks(square, occ)).empty())
-				return true;
-
-			if (const auto rooks = queens | bbs.rooks(attacker);
+			if (const auto rooks = bbs.rooks(attacker);
 				!(rooks & attacks::getRookAttacks(square, occ)).empty())
 				return true;
 
@@ -441,46 +409,37 @@ namespace oranj
 		[[nodiscard]] auto hasCycle(i32 ply) const -> bool;
 		[[nodiscard]] auto isDrawn(bool threefold) const -> bool;
 
+		[[nodiscard]] inline auto isBareKingWin() const
+		{
+			const auto &bbs = this->bbs();
+
+			const auto us = toMove();
+			const auto them = oppColor(toMove());
+
+			return bbs.occupancy(us) != bbs.kings(us)
+				&& bbs.occupancy(them) == bbs.kings(them);
+		}
+
 		[[nodiscard]] inline auto captureTarget(Move move) const
 		{
 			assert(move != NullMove);
-
-			const auto type = move.type();
-
-			if (type == MoveType::Castling)
-				return Piece::None;
-			else if (type == MoveType::EnPassant)
-				return flipPieceColor(boards().pieceAt(move.src()));
-			else return boards().pieceAt(move.dst());
+			return boards().pieceAt(move.dst());
 		}
 
 		[[nodiscard]] inline auto isNoisy(Move move) const
 		{
 			assert(move != NullMove);
 
-			const auto type = move.type();
-
-			return type != MoveType::Castling
-				&& (type == MoveType::EnPassant
-					|| move.promo() == PieceType::Queen
-					|| boards().pieceAt(move.dst()) != Piece::None);
+			return move.isPromo()
+				|| boards().pieceAt(move.dst()) != Piece::None;
 		}
 
 		[[nodiscard]] inline auto noisyCapturedPiece(Move move) const -> std::pair<bool, Piece>
 		{
 			assert(move != NullMove);
 
-			const auto type = move.type();
-
-			if (type == MoveType::Castling)
-				return {false, Piece::None};
-			else if (type == MoveType::EnPassant)
-				return {true, colorPiece(PieceType::Pawn, toMove())};
-			else
-			{
-				const auto captured = boards().pieceAt(move.dst());
-				return {captured != Piece::None || move.promo() == PieceType::Queen, captured};
-			}
+			const auto captured = boards().pieceAt(move.dst());
+			return {captured != Piece::None || move.isPromo(), captured};
 		}
 
 		[[nodiscard]] auto toFen() const -> std::string;
@@ -492,8 +451,6 @@ namespace oranj
 
 			// every other field is a function of these
 			return ourState.boards == theirState.boards
-				&& ourState.castlingRooks == theirState.castlingRooks
-				&& ourState.enPassant == theirState.enPassant
 				&& ourState.halfmove == theirState.halfmove
 				&& m_fullmove == other.m_fullmove;
 		}
@@ -522,10 +479,10 @@ namespace oranj
 			const auto &bbs = currState().boards.bbs();
 
 			return 1 * bbs.pawns().popcount()
+				 + 2 * bbs.alfils().popcount()
+				 + 2 * bbs.ferzes().popcount()
 				 + 3 * bbs.knights().popcount()
-				 + 3 * bbs.bishops().popcount()
-				 + 5 * bbs.rooks().popcount()
-				 + 9 * bbs.queens().popcount();
+				 + 5 * bbs.rooks().popcount();
 		}
 
 		auto operator=(const Position &) -> Position & = default;
@@ -548,11 +505,7 @@ namespace oranj
 		[[nodiscard]] auto movePiece(Piece piece, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece;
 
 		template <bool UpdateKeys = true, bool UpdateNnue = true>
-		auto promotePawn(Piece pawn, Square src, Square dst, PieceType promo, eval::NnueUpdates &nnueUpdates) -> Piece;
-		template <bool UpdateKeys = true, bool UpdateNnue = true>
-		auto castle(Piece king, Square kingSrc, Square rookSrc, eval::NnueUpdates &nnueUpdates) -> void;
-		template <bool UpdateKeys = true, bool UpdateNnue = true>
-		auto enPassant(Piece pawn, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece;
+		auto promotePawn(Piece pawn, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece;
 
 		[[nodiscard]] inline auto calcCheckers() const
 		{
@@ -577,16 +530,12 @@ namespace oranj
 			const auto ourOcc = bbs.occupancy(color);
 			const auto oppOcc = bbs.occupancy(opponent);
 
-			const auto oppQueens = bbs.queens(opponent);
-
-			auto potentialAttackers
-				= attacks::getBishopAttacks(king, oppOcc) & (oppQueens | bbs.bishops(opponent))
-				| attacks::  getRookAttacks(king, oppOcc) & (oppQueens | bbs.  rooks(opponent));
+			auto potentialAttackers = attacks::getRookAttacks(king, oppOcc) & bbs.rooks(opponent);
 
 			while (potentialAttackers)
 			{
 				const auto potentialAttacker = potentialAttackers.popLowestSquare();
-				const auto maybePinned = ourOcc & rayBetween(potentialAttacker, king);
+				const auto maybePinned = ourOcc & orthoRayBetween(potentialAttacker, king);
 
 				if (maybePinned.one())
 					pinned |= maybePinned;
@@ -607,20 +556,18 @@ namespace oranj
 
 			const auto occ = bbs.occupancy();
 
-			const auto queens = bbs.queens(them);
-
-			auto rooks = queens | bbs.rooks(them);
-			while (rooks)
+			auto alfils = bbs.alfils(them);
+			while (alfils)
 			{
-				const auto rook = rooks.popLowestSquare();
-				threats |= attacks::getRookAttacks(rook, occ);
+				const auto alfil = alfils.popLowestSquare();
+				threats |= attacks::getAlfilAttacks(alfil);
 			}
 
-			auto bishops = queens | bbs.bishops(them);
-			while (bishops)
+			auto ferzes = bbs.ferzes(them);
+			while (ferzes)
 			{
-				const auto bishop = bishops.popLowestSquare();
-				threats |= attacks::getBishopAttacks(bishop, occ);
+				const auto ferz = ferzes.popLowestSquare();
+				threats |= attacks::getFerzAttacks(ferz);
 			}
 
 			auto knights = bbs.knights(them);
@@ -628,6 +575,13 @@ namespace oranj
 			{
 				const auto knight = knights.popLowestSquare();
 				threats |= attacks::getKnightAttacks(knight);
+			}
+
+			auto rooks = bbs.rooks(them);
+			while (rooks)
+			{
+				const auto rook = rooks.popLowestSquare();
+				threats |= attacks::getRookAttacks(rook, occ);
 			}
 
 			const auto pawns = bbs.pawns(them);
@@ -639,9 +593,6 @@ namespace oranj
 
 			return threats;
 		}
-
-		// Unsets ep squares if they are invalid (no pawn is able to capture)
-		static void filterEp(BoardState &state, Color capturing);
 
 		bool m_blackToMove{};
 

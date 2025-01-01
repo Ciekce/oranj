@@ -36,6 +36,44 @@
 
 namespace oranj::attacks
 {
+	constexpr auto AlfilAttacks = []
+	{
+		std::array<Bitboard, 64> dst{};
+
+		for (usize i = 0; i < dst.size(); ++i)
+		{
+			const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
+
+			auto &attacks = dst[i];
+
+			attacks |= bit.shiftUpLeft().shiftUpLeft();
+			attacks |= bit.shiftUpRight().shiftUpRight();
+			attacks |= bit.shiftDownLeft().shiftDownLeft();
+			attacks |= bit.shiftDownRight().shiftDownRight();
+		}
+
+		return dst;
+	}();
+
+	constexpr auto FerzAttacks = []
+	{
+		std::array<Bitboard, 64> dst{};
+
+		for (usize i = 0; i < dst.size(); ++i)
+		{
+			const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
+
+			auto &attacks = dst[i];
+
+			attacks |= bit.shiftUpLeft();
+			attacks |= bit.shiftUpRight();
+			attacks |= bit.shiftDownLeft();
+			attacks |= bit.shiftDownRight();
+		}
+
+		return dst;
+	}();
+
 	constexpr auto KnightAttacks = []
 	{
 		std::array<Bitboard, 64> dst{};
@@ -101,6 +139,16 @@ namespace oranj::attacks
 	constexpr auto BlackPawnAttacks = generatePawnAttacks<Color::Black>();
 	constexpr auto WhitePawnAttacks = generatePawnAttacks<Color::White>();
 
+	constexpr auto getAlfilAttacks(Square src)
+	{
+		return AlfilAttacks[static_cast<usize>(src)];
+	}
+
+	constexpr auto getFerzAttacks(Square src)
+	{
+		return FerzAttacks[static_cast<usize>(src)];
+	}
+
 	constexpr auto getKnightAttacks(Square src)
 	{
 		return KnightAttacks[static_cast<usize>(src)];
@@ -117,12 +165,6 @@ namespace oranj::attacks
 		return attacks[static_cast<usize>(src)];
 	}
 
-	inline auto getQueenAttacks(Square src, Bitboard occupancy)
-	{
-		return getRookAttacks(src, occupancy)
-			| getBishopAttacks(src, occupancy);
-	}
-
 	inline auto getNonPawnPieceAttacks(PieceType piece, Square src, Bitboard occupancy = Bitboard{})
 	{
 		assert(piece != PieceType::None);
@@ -130,10 +172,10 @@ namespace oranj::attacks
 
 		switch (piece)
 		{
+		case PieceType::Alfil: return getAlfilAttacks(src);
+		case PieceType::Ferz: return getFerzAttacks(src);
 		case PieceType::Knight: return getKnightAttacks(src);
-		case PieceType::Bishop: return getBishopAttacks(src, occupancy);
 		case PieceType::Rook: return getRookAttacks(src, occupancy);
-		case PieceType::Queen: return getQueenAttacks(src, occupancy);
 		case PieceType::King: return getKingAttacks(src);
 		default: __builtin_unreachable();
 		}

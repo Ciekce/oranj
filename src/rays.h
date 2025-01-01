@@ -29,7 +29,7 @@
 
 namespace oranj
 {
-	consteval auto generateBetweenRays()
+	constexpr auto BetweenRays = []
 	{
 		util::MultiArray<Bitboard, 64, 64> dst{};
 
@@ -38,8 +38,7 @@ namespace oranj
 			const auto srcSquare = static_cast<Square>(from);
 			const auto srcMask = squareBit(srcSquare);
 
-			const auto   rookAttacks = attacks::EmptyBoardRooks  [from];
-			const auto bishopAttacks = attacks::EmptyBoardBishops[from];
+			const auto rookAttacks = attacks::EmptyBoardRooks[from];
 
 			for (i32 to = 0; to < 64; ++to)
 			{
@@ -53,17 +52,13 @@ namespace oranj
 					dst[from][to]
 						= attacks::genRookAttacks(srcSquare, dstMask)
 						& attacks::genRookAttacks(dstSquare, srcMask);
-				else if (bishopAttacks[dstSquare])
-					dst[from][to]
-						= attacks::genBishopAttacks(srcSquare, dstMask)
-						& attacks::genBishopAttacks(dstSquare, srcMask);
 			}
 		}
 
 		return dst;
-	}
+	}();
 
-	consteval auto generateIntersectingRays()
+	constexpr auto IntersectingRays = []
 	{
 		util::MultiArray<Bitboard, 64, 64> dst{};
 
@@ -72,8 +67,7 @@ namespace oranj
 			const auto srcSquare = static_cast<Square>(from);
 			const auto srcMask = squareBit(srcSquare);
 
-			const auto   rookAttacks = attacks::EmptyBoardRooks  [from];
-			const auto bishopAttacks = attacks::EmptyBoardBishops[from];
+			const auto rookAttacks = attacks::EmptyBoardRooks[from];
 
 			for (i32 to = 0; to < 64; ++to)
 			{
@@ -87,25 +81,18 @@ namespace oranj
 					dst[from][to]
 						= (srcMask | attacks::genRookAttacks(srcSquare, Bitboard{}))
 						& (dstMask | attacks::genRookAttacks(dstSquare, Bitboard{}));
-				else if (bishopAttacks[dstSquare])
-					dst[from][to]
-						= (srcMask | attacks::genBishopAttacks(srcSquare, Bitboard{}))
-						& (dstMask | attacks::genBishopAttacks(dstSquare, Bitboard{}));
 			}
 		}
 
 		return dst;
-	}
+	}();
 
-	constexpr auto BetweenRays = generateBetweenRays();
-	constexpr auto IntersectingRays = generateIntersectingRays();
-
-	constexpr auto rayBetween(Square src, Square dst)
+	constexpr auto orthoRayBetween(Square src, Square dst)
 	{
 		return BetweenRays[static_cast<i32>(src)][static_cast<i32>(dst)];
 	}
 
-	constexpr auto rayIntersecting(Square src, Square dst)
+	constexpr auto orthoRayIntersecting(Square src, Square dst)
 	{
 		return IntersectingRays[static_cast<i32>(src)][static_cast<i32>(dst)];
 	}

@@ -60,12 +60,12 @@ namespace oranj::eval
 			const auto bbs = pos.bbs();
 
 			const auto npMaterial
-				= see::values::Knight * bbs.knights().popcount()
-				+ see::values::Bishop * bbs.bishops().popcount()
-				+ see::values::Rook   * bbs.rooks  ().popcount()
-				+ see::values::Queen  * bbs.queens ().popcount();
+				= see::values::Alfil  * bbs.alfils ().popcount()
+				+ see::values::Ferz   * bbs.ferzes ().popcount()
+				+ see::values::Knight * bbs.knights().popcount()
+				+ see::values::Rook   * bbs.rooks  ().popcount();
 
-			eval = eval * (26500 + npMaterial) / 32768;
+			eval = eval * (13000 + npMaterial) / 16384;
 		}
 
 		eval += contempt[static_cast<i32>(pos.toMove())];

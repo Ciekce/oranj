@@ -25,9 +25,9 @@
 namespace oranj::bench
 {
 #ifdef OJ_PGO_PROFILE
-	constexpr i32 DefaultBenchDepth = 10;
-#else
 	constexpr i32 DefaultBenchDepth = 14;
+#else
+	constexpr i32 DefaultBenchDepth = 20;
 #endif
 
 	constexpr usize DefaultBenchTtSize = 16;

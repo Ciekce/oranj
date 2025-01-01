@@ -831,7 +831,9 @@ namespace oranj::search
 
 			Score score{};
 
-			if (pos.isDrawn(true))
+			if (pos.isBareKingWin())
+				score = -ScoreMate + ply; //TODO correct ply?
+			else if (pos.isDrawn(true))
 				score = drawScore(thread.search.loadNodes());
 			else
 			{
@@ -936,7 +938,7 @@ namespace oranj::search
 		}
 
 		if (legalMoves == 0)
-			return inCheck ? (-ScoreMate + ply) : 0;
+			return -ScoreMate + ply;
 
 		if (bestMove)
 		{
@@ -1103,9 +1105,15 @@ namespace oranj::search
 			thread.setMove(ply, move);
 			const auto guard = pos.applyMove(move, &thread.nnueState);
 
-			const auto score = pos.isDrawn(false)
-				? drawScore(thread.search.loadNodes())
-				: -qsearch<PvNode>(thread, ply + 1, moveStackIdx + 1, -beta, -alpha);
+			const auto score = [&]
+			{
+				if (pos.isBareKingWin())
+					return -ScoreMate + ply;
+				else if (pos.isDrawn(false))
+					return drawScore(thread.search.loadNodes());
+
+				return -qsearch(thread, ply + 1, moveStackIdx + 1, -beta, -alpha);
+			}();
 
 			if (hasStopped())
 				return 0;

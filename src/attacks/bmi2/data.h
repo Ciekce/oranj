@@ -26,7 +26,6 @@
 #include "../../bitboard.h"
 #include "../util.h"
 
-// ignore the duplication pls ty :3
 namespace oranj::attacks::bmi2
 {
 	struct RookSquareData
@@ -39,18 +38,6 @@ namespace oranj::attacks::bmi2
 	struct RookData_
 	{
 		std::array<RookSquareData, 64> data;
-		u32 tableSize;
-	};
-
-	struct BishopSquareData
-	{
-		Bitboard mask;
-		u32 offset;
-	};
-
-	struct BishopData_
-	{
-		std::array<BishopSquareData, 64> data;
 		u32 tableSize;
 	};
 
@@ -77,32 +64,6 @@ namespace oranj::attacks::bmi2
 
 			dst.data[i].offset = dst.tableSize;
 			dst.tableSize += 1 << dst.data[i].srcMask.popcount();
-		}
-
-		return dst;
-	}();
-
-	constexpr auto BishopData = []
-	{
-		BishopData_ dst{};
-
-		for (u32 i = 0; i < 64; ++i)
-		{
-			const auto square = static_cast<Square>(i);
-
-			for (const auto dir : {
-				offsets::UpLeft,
-				offsets::UpRight,
-				offsets::DownLeft,
-				offsets::DownRight
-			})
-			{
-				const auto attacks = internal::generateSlidingAttacks(square, dir, 0);
-				dst.data[i].mask |= attacks & ~internal::edges(dir);
-			}
-
-			dst.data[i].offset = dst.tableSize;
-			dst.tableSize += 1 << dst.data[i].mask.popcount();
 		}
 
 		return dst;

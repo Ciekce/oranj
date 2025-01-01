@@ -31,18 +31,14 @@ namespace oranj::keys
 	{
 		constexpr usize PieceSquares = 12 * 64;
 		constexpr usize Color = 1;
-		constexpr usize Castling = 16;
-		constexpr usize EnPassant = 8;
 
-		constexpr auto Total = PieceSquares + Color + Castling + EnPassant;
+		constexpr auto Total = PieceSquares + Color;
 	}
 
 	namespace offsets
 	{
 		constexpr usize PieceSquares = 0;
 		constexpr auto Color = PieceSquares + sizes::PieceSquares;
-		constexpr auto Castling = Color + sizes::Color;
-		constexpr auto EnPassant = Castling + sizes::Castling;
 	}
 
 	constexpr auto Keys = []
@@ -78,39 +74,5 @@ namespace oranj::keys
 	inline auto color(Color c)
 	{
 		return c == Color::White ? 0 : color();
-	}
-
-	inline auto castling(const CastlingRooks &castlingRooks)
-	{
-		constexpr usize BlackShort = 0x01;
-		constexpr usize BlackLong  = 0x02;
-		constexpr usize WhiteShort = 0x04;
-		constexpr usize WhiteLong  = 0x08;
-
-		usize flags{};
-
-		if (castlingRooks.black().kingside  != Square::None)
-			flags |= BlackShort;
-		if (castlingRooks.black().queenside != Square::None)
-			flags |= BlackLong;
-		if (castlingRooks.white().kingside  != Square::None)
-			flags |= WhiteShort;
-		if (castlingRooks.white().queenside != Square::None)
-			flags |= WhiteLong;
-
-		return Keys[offsets::Castling + flags];
-	}
-
-	inline auto enPassant(u32 file)
-	{
-		return Keys[offsets::EnPassant + file];
-	}
-
-	inline auto enPassant(Square square) -> u64
-	{
-		if (square == Square::None)
-			return 0;
-
-		return Keys[offsets::EnPassant + squareFile(square)];
 	}
 }

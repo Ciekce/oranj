@@ -51,34 +51,8 @@ namespace oranj::attacks
 
 			return dst;
 		}
-
-		auto generateBishopAttacks()
-		{
-			std::array<Bitboard, BishopData.tableSize> dst{};
-
-			for (u32 square = 0; square < 64; ++square)
-			{
-				const auto &data = BishopData.data[square];
-				const auto entries = 1 << data.mask.popcount();
-
-				for (u32 i = 0; i < entries; ++i)
-				{
-					const auto occupancy = util::pdep(i, data.mask);
-
-					for (const auto dir
-						: {offsets::UpLeft, offsets::UpRight, offsets::DownLeft, offsets::DownRight})
-					{
-						dst[data.offset + i]
-							|= internal::generateSlidingAttacks(static_cast<Square>(square), dir, occupancy);
-					}
-				}
-			}
-
-			return dst;
-		}
 	}
 
-	const std::array<     u16,   RookData.tableSize>   RookAttacks =   generateRookAttacks();
-	const std::array<Bitboard, BishopData.tableSize> BishopAttacks = generateBishopAttacks();
+	const std::array<u16, RookData.tableSize> RookAttacks = generateRookAttacks();
 }
 #endif // OJ_HAS_BMI2

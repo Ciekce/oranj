@@ -167,7 +167,7 @@ namespace oranj
 		util::MultiArray<ContinuationSubtable, 12, 64> m_continuation{};
 
 		// [from][to][captured][defended]
-		// additional slot for non-capture queen promos
+		// additional slot for non-capture promos
 		util::MultiArray<HistoryEntry, 64, 64, 13, 2> m_noisy{};
 
 		static inline auto updateConthist(std::span<ContinuationSubtable *> continuations,

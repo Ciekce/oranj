@@ -37,7 +37,7 @@ namespace oranj::cuckoo
 		u32 count = 0;
 
 		// skip pawns
-		for (u32 p = static_cast<u32>(Piece::BlackKnight);
+		for (u32 p = static_cast<u32>(Piece::BlackAlfil);
 			p < static_cast<u32>(Piece::None);
 			++p)
 		{

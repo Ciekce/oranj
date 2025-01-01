@@ -38,15 +38,12 @@ namespace oranj::datagen
 		static constexpr auto MoveTypes = std::array{
 			static_cast<u16>(0x0000), // normal
 			static_cast<u16>(0xC000), // promo
-			static_cast<u16>(0x8000), // castling
-			static_cast<u16>(0x4000)  // ep
 		};
 
 		u16 viriMove{};
 
 		viriMove |= move.srcIdx();
 		viriMove |= move.dstIdx() << 6;
-		viriMove |= move.promoIdx() << 12;
 		viriMove |= MoveTypes[static_cast<i32>(move.type())];
 
 		m_moves.push_back({viriMove, static_cast<i16>(score)});

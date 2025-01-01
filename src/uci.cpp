@@ -192,6 +192,7 @@ namespace oranj
 
 			std::cout << std::boolalpha;
 
+			std::cout << "option name UCI_Variant type combo default shatranj var shatranj\n";
 			std::cout << "option name Hash type spin default " << DefaultTtSizeMib
 			          << " min " << TtSizeMibRange.min() << " max " << TtSizeMibRange.max() << '\n';
 			std::cout << "option name Clear Hash type button\n";
@@ -406,7 +407,7 @@ namespace oranj
 								&& candidate[1] >= '1' && candidate[1] <= '8'
 								&& candidate[2] >= 'a' && candidate[2] <= 'h'
 								&& candidate[3] >= '1' && candidate[3] <= '8'
-								&& (candidate.length() < 5 || isValidPromotion(pieceTypeFromChar(candidate[4]))))
+								&& (candidate.length() < 5 || candidate[4] == 'q'))
 							{
 								const auto move = m_pos.moveFromUci(candidate);
 
@@ -881,22 +882,10 @@ namespace oranj
 			std::ostringstream str{};
 
 			str << squareToString(move.src());
+			str << squareToString(move.dst());
 
-			const auto type = move.type();
-
-			if (type != MoveType::Castling || g_opts.chess960)
-			{
-				str << squareToString(move.dst());
-				if (type == MoveType::Promotion)
-					str << pieceTypeToChar(move.promo());
-			}
-			else
-			{
-				const auto dst = move.srcFile() < move.dstFile()
-					? toSquare(move.srcRank(), 6)
-					: toSquare(move.srcRank(), 2);
-				str << squareToString(dst);
-			}
+			if (move.isPromo())
+				str << 'q';
 
 			return str.str();
 		}

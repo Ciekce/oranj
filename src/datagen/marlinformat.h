@@ -48,7 +48,6 @@ namespace oranj::datagen
 
 				PackedBoard board{};
 
-				const auto castlingRooks = pos.castlingRooks();
 				const auto &boards = pos.boards();
 
 				auto occupancy = boards.bbs().occupancy();
@@ -60,15 +59,7 @@ namespace oranj::datagen
 					const auto square = occupancy.popLowestSquare();
 					const auto piece = boards.pieceAt(square);
 
-					auto pieceId = static_cast<u8>(pieceType(piece));
-
-					if (pieceType(piece) == PieceType::Rook
-						&& (square == castlingRooks.black().kingside
-							|| square == castlingRooks.black().queenside
-							|| square == castlingRooks.white().kingside
-							|| square == castlingRooks.white().queenside))
-						pieceId = UnmovedRook;
-
+					const auto pieceId = static_cast<u8>(pieceType(piece));
 					const u8 colorId = pieceColor(piece) == Color::Black ? (1 << 3) : 0;
 
 					board.pieces[i++] = pieceId | colorId;
@@ -76,10 +67,7 @@ namespace oranj::datagen
 
 				const u8 stm = pos.toMove() == Color::Black ? (1 << 7) : 0;
 
-				const Square relativeEpSquare = pos.enPassant() == Square::None ? Square::None
-					: toSquare(pos.toMove() == Color::Black ? 2 : 5, squareFile(pos.enPassant()));
-
-				board.stmEpSquare = stm | static_cast<u8>(relativeEpSquare);
+				board.stmEpSquare = stm;
 				board.halfmoveClock = pos.halfmove();
 				board.fullmoveNumber = pos.fullmove();
 				board.eval = score;

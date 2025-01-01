@@ -30,8 +30,7 @@
 
 namespace oranj::attacks
 {
-	extern const std::array<     u16, bmi2::  RookData.tableSize>   RookAttacks;
-	extern const std::array<Bitboard, bmi2::BishopData.tableSize> BishopAttacks;
+	extern const std::array<u16, bmi2::RookData.tableSize>   RookAttacks;
 
 	inline auto getRookAttacks(Square src, Bitboard occupancy) -> Bitboard
 	{
@@ -43,15 +42,5 @@ namespace oranj::attacks
 		const auto attacks = util::pdep(RookAttacks[data.offset + idx], data.dstMask);
 
 		return attacks;
-	}
-
-	inline auto getBishopAttacks(Square src, Bitboard occupancy)
-	{
-		const auto s = static_cast<i32>(src);
-
-		const auto &data = bmi2::BishopData.data[s];
-		const auto idx = util::pext(occupancy, data.mask);
-
-		return BishopAttacks[data.offset + idx];
 	}
 }
