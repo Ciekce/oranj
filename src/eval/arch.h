@@ -23,25 +23,28 @@
 #include <array>
 
 #include "nnue/activation.h"
-#include "nnue/output.h"
+#include "nnue/arch/multilayer.h"
+#include "nnue/arch/singlelayer.h"
 #include "nnue/features.h"
+#include "nnue/output.h"
 
-namespace oranj::eval
-{
-	// current arch: (768x16->1536)x2->1x8, mirrored, SquaredClippedReLU
+namespace oranj::eval {
+    // current arch: (768->128)x2->1
+    // squared clipped ReLU
 
-	constexpr i32 L1Q = 255;
-	constexpr i32 OutputQ = 64;
+    constexpr u32 kFtQBits = 8;
+    constexpr u32 kL1QBits = 6;
 
-	constexpr bool PairwiseMul = false;
+    constexpr u32 kL1Size = 128;
 
-	constexpr u32 L1Size = 128;
+    using L1Activation = nnue::activation::SquaredClippedReLU;
 
-	using L1Activation = nnue::activation::SquaredClippedReLU<i16, i32, L1Q>;
+    constexpr i32 kScale = 400;
 
-	constexpr i32 Scale = 400;
+    using InputFeatureSet = nnue::features::SingleBucket;
 
-	using InputFeatureSet = nnue::features::SingleBucket;
+    using OutputBucketing = nnue::output::Single;
 
-	using OutputBucketing = nnue::output::Single;
-}
+    using LayeredArch =
+        nnue::arch::SingleLayer<kL1Size, (1 << kFtQBits) - 1, 1 << kL1QBits, L1Activation, OutputBucketing, kScale>;
+} // namespace oranj::eval

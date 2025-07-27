@@ -21,389 +21,405 @@
 #include "../types.h"
 
 #include <array>
-#include <iostream>
 
 #include "../bitboard.h"
 
-namespace oranj
-{
-	class BitboardSet
-	{
-	public:
-		BitboardSet() = default;
-		~BitboardSet() = default;
-
-		[[nodiscard]] inline auto forColor(Color color) -> auto &
-		{
-			return m_colors[static_cast<i32>(color)];
-		}
-
-		[[nodiscard]] inline auto forColor(Color color) const
-		{
-			return m_colors[static_cast<i32>(color)];
-		}
-
-		[[nodiscard]] inline auto forPiece(PieceType piece) -> Bitboard &
-		{
-			return m_pieces[static_cast<i32>(piece)];
-		}
-
-		[[nodiscard]] inline auto forPiece(PieceType piece) const
-		{
-			return m_pieces[static_cast<i32>(piece)];
-		}
-
-		[[nodiscard]] inline auto forPiece(PieceType piece, Color c) const
-		{
-			return m_pieces[static_cast<i32>(piece)] & forColor(c);
-		}
-
-		[[nodiscard]] inline auto forPiece(Piece piece) const
-		{
-			return forPiece(pieceType(piece), pieceColor(piece));
-		}
-
-		[[nodiscard]] inline auto blackOccupancy() const { return m_colors[0]; }
-		[[nodiscard]] inline auto whiteOccupancy() const { return m_colors[1]; }
-
-		template <Color C>
-		[[nodiscard]] inline auto occupancy() const
-		{
-			return m_colors[static_cast<i32>(C)];
-		}
-
-		[[nodiscard]] inline auto occupancy(Color c) const
-		{
-			return m_colors[static_cast<i32>(c)];
-		}
-
-		[[nodiscard]] inline auto occupancy() const { return m_colors[0] | m_colors[1]; }
-
-		[[nodiscard]] inline auto pawns() const { return forPiece(PieceType::Pawn); }
-		[[nodiscard]] inline auto alfils() const { return forPiece(PieceType::Alfil); }
-		[[nodiscard]] inline auto ferzes() const { return forPiece(PieceType::Ferz); }
-		[[nodiscard]] inline auto knights() const { return forPiece(PieceType::Knight); }
-		[[nodiscard]] inline auto rooks() const { return forPiece(PieceType::Rook); }
-		[[nodiscard]] inline auto kings() const { return forPiece(PieceType::King); }
-
-		[[nodiscard]] inline auto blackPawns() const { return pawns() & blackOccupancy(); }
-		[[nodiscard]] inline auto whitePawns() const { return pawns() & whiteOccupancy(); }
-
-		[[nodiscard]] inline auto blackAlfils() const { return alfils() & blackOccupancy(); }
-		[[nodiscard]] inline auto whiteAlfils() const { return alfils() & whiteOccupancy(); }
-
-		[[nodiscard]] inline auto blackFerzes() const { return ferzes() & blackOccupancy(); }
-		[[nodiscard]] inline auto whiteFerzes() const { return ferzes() & whiteOccupancy(); }
-
-		[[nodiscard]] inline auto blackKnights() const { return knights() & blackOccupancy(); }
-		[[nodiscard]] inline auto whiteKnights() const { return knights() & whiteOccupancy(); }
-
-		[[nodiscard]] inline auto blackRooks() const { return rooks() & blackOccupancy(); }
-		[[nodiscard]] inline auto whiteRooks() const { return rooks() & whiteOccupancy(); }
-
-		[[nodiscard]] inline auto blackKings() const { return kings() & blackOccupancy(); }
-		[[nodiscard]] inline auto whiteKings() const { return kings() & whiteOccupancy(); }
-
-		[[nodiscard]] inline auto minors() const
-		{
-			return alfils() | ferzes() | knights();
-		}
-
-		[[nodiscard]] inline auto blackMinors() const
-		{
-			return minors() & blackOccupancy();
-		}
-
-		[[nodiscard]] inline auto whiteMinors() const
-		{
-			return minors() & whiteOccupancy();
-		}
-
-		[[nodiscard]] inline auto majors() const
-		{
-			return rooks();
-		}
-
-		[[nodiscard]] inline auto blackMajors() const
-		{
-			return majors() & blackOccupancy();
-		}
-
-		[[nodiscard]] inline auto whiteMajors() const
-		{
-			return majors() & whiteOccupancy();
-		}
-
-		[[nodiscard]] inline auto nonPk() const
-		{
-			return occupancy() ^ pawns() ^ kings();
-		}
-
-		[[nodiscard]] inline auto blackNonPk() const
-		{
-			return blackOccupancy() ^ (pawns() | kings()) & blackOccupancy();
-		}
-
-		[[nodiscard]] inline auto whiteNonPk() const
-		{
-			return whiteOccupancy() ^ (pawns() | kings()) & whiteOccupancy();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto pawns() const
-		{
-			if constexpr (C == Color::Black)
-				return blackPawns();
-			else return whitePawns();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto alfils() const
-		{
-			if constexpr (C == Color::Black)
-				return blackAlfils();
-			else return whiteAlfils();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto ferzes() const
-		{
-			if constexpr (C == Color::Black)
-				return blackFerzes();
-			else return whiteFerzes();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto knights() const
-		{
-			if constexpr (C == Color::Black)
-				return blackKnights();
-			else return whiteKnights();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto rooks() const
-		{
-			if constexpr (C == Color::Black)
-				return blackRooks();
-			else return whiteRooks();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto kings() const
-		{
-			if constexpr (C == Color::Black)
-				return blackKings();
-			else return whiteKings();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto minors() const
-		{
-			if constexpr (C == Color::Black)
-				return blackMinors();
-			else return whiteMinors();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto majors() const
-		{
-			if constexpr (C == Color::Black)
-				return blackMajors();
-			else return whiteMajors();
-		}
-
-		template <Color C>
-		[[nodiscard]] inline auto nonPk() const
-		{
-			if constexpr (C == Color::Black)
-				return blackNonPk();
-			else return whiteNonPk();
-		}
-
-		[[nodiscard]] inline auto pawns(Color color) const
-		{
-			return forPiece(PieceType::Pawn, color);
-		}
-
-		[[nodiscard]] inline auto alfils(Color color) const
-		{
-			return forPiece(PieceType::Alfil, color);
-		}
-
-		[[nodiscard]] inline auto ferzes(Color color) const
-		{
-			return forPiece(PieceType::Ferz, color);
-		}
-
-		[[nodiscard]] inline auto knights(Color color) const
-		{
-			return forPiece(PieceType::Knight, color);
-		}
-
-		[[nodiscard]] inline auto rooks(Color color) const
-		{
-			return forPiece(PieceType::Rook, color);
-		}
-
-		[[nodiscard]] inline auto kings(Color color) const
-		{
-			return forPiece(PieceType::King, color);
-		}
-
-		[[nodiscard]] inline auto minors(Color color) const
-		{
-			return color == Color::Black ? blackMinors() : whiteMinors();
-		}
-
-		[[nodiscard]] inline auto majors(Color color) const
-		{
-			return color == Color::Black ? blackMajors() : whiteMajors();
-		}
-
-		[[nodiscard]] inline auto nonPk(Color color) const
-		{
-			return color == Color::Black ? blackNonPk() : whiteNonPk();
-		}
-
-		[[nodiscard]] inline auto operator==(const BitboardSet &other) const -> bool = default;
-
-	private:
-		std::array<Bitboard, 2> m_colors{};
-		std::array<Bitboard, 6> m_pieces{};
-	};
-
-	class PositionBoards
-	{
-	public:
-		PositionBoards()
-		{
-			m_mailbox.fill(Piece::None);
-		}
-
-		~PositionBoards() = default;
-
-		[[nodiscard]] inline auto bbs() const -> const auto &
-		{
-			return m_bbs;
-		}
-
-		[[nodiscard]] inline auto bbs() -> auto &
-		{
-			return m_bbs;
-		}
-
-		[[nodiscard]] inline auto pieceTypeAt(Square square) const
-		{
-			assert(square != Square::None);
-
-			const auto piece = m_mailbox[static_cast<i32>(square)];
-			return piece == Piece::None ? PieceType::None : pieceType(piece);
-		}
-
-		[[nodiscard]] inline auto pieceAt(Square square) const
-		{
-			assert(square != Square::None);
-			return m_mailbox[static_cast<i32>(square)];
-		}
-
-		[[nodiscard]] inline auto pieceAt(u32 rank, u32 file) const
-		{
-			return pieceAt(toSquare(rank, file));
-		}
-
-		inline auto setPiece(Square square, Piece piece)
-		{
-			assert(square != Square::None);
-			assert(piece != Piece::None);
-
-			assert(pieceAt(square) == Piece::None);
-
-			slot(square) = piece;
-
-			const auto mask = Bitboard::fromSquare(square);
-
-			m_bbs.forPiece(pieceType(piece)) ^= mask;
-			m_bbs.forColor(pieceColor(piece)) ^= mask;
-		}
-
-		inline auto movePiece(Square src, Square dst, Piece piece)
-		{
-			assert(src != Square::None);
-			assert(dst != Square::None);
-
-			if (slot(src) == piece) [[likely]]
-				slot(src) = Piece::None;
-			slot(dst) = piece;
-
-			const auto mask = Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst);
-
-			m_bbs.forPiece(pieceType(piece)) ^= mask;
-			m_bbs.forColor(pieceColor(piece)) ^= mask;
-		}
-
-		inline auto moveAndChangePiece(Square src, Square dst, Piece moving, PieceType promo)
-		{
-			assert(src != Square::None);
-			assert(dst != Square::None);
-			assert(src != dst);
-
-			assert(moving != Piece::None);
-			assert(promo != PieceType::None);
-
-			assert(pieceAt(src) == moving);
-			assert(slot(src) == moving);
-
-			slot(src) = Piece::None;
-			slot(dst) = copyPieceColor(moving, promo);
-
-			m_bbs.forPiece(pieceType(moving))[src] = false;
-			m_bbs.forPiece(promo)[dst] = true;
-
-			const auto mask = Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst);
-			m_bbs.forColor(pieceColor(moving)) ^= mask;
-		}
-
-		inline auto removePiece(Square square, Piece piece)
-		{
-			assert(square != Square::None);
-			assert(piece != Piece::None);
-
-			assert(pieceAt(square) == piece);
-
-			slot(square) = Piece::None;
-
-			m_bbs.forPiece(pieceType(piece))[square] = false;
-			m_bbs.forColor(pieceColor(piece))[square] = false;
-		}
-
-		inline auto regenFromBbs()
-		{
-			m_mailbox.fill(Piece::None);
-
-			for (u32 pieceIdx = 0; pieceIdx < 12; ++pieceIdx)
-			{
-				const auto piece = static_cast<Piece>(pieceIdx);
-
-				auto board = m_bbs.forPiece(piece);
-				while (!board.empty())
-				{
-					const auto sq = board.popLowestSquare();
-					assert(slot(sq) == Piece::None);
-					slot(sq) = piece;
-				}
-			}
-		}
-
-		[[nodiscard]] inline auto operator==(const PositionBoards &other) const -> bool = default;
-
-	private:
-		[[nodiscard]] inline auto slot(Square square) -> Piece &
-		{
-			return m_mailbox[static_cast<i32>(square)];
-		}
-
-		BitboardSet m_bbs{};
-		std::array<Piece, 64> m_mailbox{};
-	};
-}
+namespace oranj {
+    class BitboardSet {
+    public:
+        [[nodiscard]] inline Bitboard& forColor(Color color) {
+            return m_colors[static_cast<i32>(color)];
+        }
+
+        [[nodiscard]] inline Bitboard forColor(Color color) const {
+            return m_colors[static_cast<i32>(color)];
+        }
+
+        [[nodiscard]] inline Bitboard& forPiece(PieceType piece) {
+            return m_pieces[static_cast<i32>(piece)];
+        }
+
+        [[nodiscard]] inline Bitboard forPiece(PieceType piece) const {
+            return m_pieces[static_cast<i32>(piece)];
+        }
+
+        [[nodiscard]] inline Bitboard forPiece(PieceType piece, Color c) const {
+            return m_pieces[static_cast<i32>(piece)] & forColor(c);
+        }
+
+        [[nodiscard]] inline Bitboard forPiece(Piece piece) const {
+            return forPiece(pieceType(piece), pieceColor(piece));
+        }
+
+        [[nodiscard]] inline Bitboard blackOccupancy() const {
+            return m_colors[0];
+        }
+
+        [[nodiscard]] inline Bitboard whiteOccupancy() const {
+            return m_colors[1];
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard occupancy() const {
+            return m_colors[static_cast<i32>(kC)];
+        }
+
+        [[nodiscard]] inline Bitboard occupancy(Color c) const {
+            return m_colors[static_cast<i32>(c)];
+        }
+
+        [[nodiscard]] inline Bitboard occupancy() const {
+            return m_colors[0] | m_colors[1];
+        }
+
+        [[nodiscard]] inline Bitboard pawns() const {
+            return forPiece(PieceType::kPawn);
+        }
+
+        [[nodiscard]] inline Bitboard alfils() const {
+            return forPiece(PieceType::kAlfil);
+        }
+
+        [[nodiscard]] inline Bitboard ferzes() const {
+            return forPiece(PieceType::kFerz);
+        }
+
+        [[nodiscard]] inline Bitboard knights() const {
+            return forPiece(PieceType::kKnight);
+        }
+
+        [[nodiscard]] inline Bitboard rooks() const {
+            return forPiece(PieceType::kRook);
+        }
+
+        [[nodiscard]] inline Bitboard kings() const {
+            return forPiece(PieceType::kKing);
+        }
+
+        [[nodiscard]] inline Bitboard blackPawns() const {
+            return pawns() & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whitePawns() const {
+            return pawns() & whiteOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard blackAlfils() const {
+            return alfils() & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whiteAlfils() const {
+            return alfils() & whiteOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard blackFerzes() const {
+            return ferzes() & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whiteFerzes() const {
+            return ferzes() & whiteOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard blackKnights() const {
+            return knights() & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whiteKnights() const {
+            return knights() & whiteOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard blackRooks() const {
+            return rooks() & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whiteRooks() const {
+            return rooks() & whiteOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard blackKings() const {
+            return kings() & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whiteKings() const {
+            return kings() & whiteOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard minors() const {
+            return ferzes() | knights() | alfils();
+        }
+
+        [[nodiscard]] inline Bitboard blackMinors() const {
+            return minors() & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whiteMinors() const {
+            return minors() & whiteOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard majors() const {
+            return rooks();
+        }
+
+        [[nodiscard]] inline Bitboard blackMajors() const {
+            return majors() & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whiteMajors() const {
+            return majors() & whiteOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard nonPk() const {
+            return occupancy() ^ pawns() ^ kings();
+        }
+
+        [[nodiscard]] inline Bitboard blackNonPk() const {
+            return blackOccupancy() ^ (pawns() | kings()) & blackOccupancy();
+        }
+
+        [[nodiscard]] inline Bitboard whiteNonPk() const {
+            return whiteOccupancy() ^ (pawns() | kings()) & whiteOccupancy();
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard pawns() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackPawns();
+            } else {
+                return whitePawns();
+            }
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard alfils() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackAlfils();
+            } else {
+                return whiteAlfils();
+            }
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard ferzes() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackFerzes();
+            } else {
+                return whiteFerzes();
+            }
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard knights() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackKnights();
+            } else {
+                return whiteKnights();
+            }
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard rooks() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackRooks();
+            } else {
+                return whiteRooks();
+            }
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard kings() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackKings();
+            } else {
+                return whiteKings();
+            }
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard minors() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackMinors();
+            } else {
+                return whiteMinors();
+            }
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard majors() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackMajors();
+            } else {
+                return whiteMajors();
+            }
+        }
+
+        template <Color kC>
+        [[nodiscard]] inline Bitboard nonPk() const {
+            if constexpr (kC == Color::kBlack) {
+                return blackNonPk();
+            } else {
+                return whiteNonPk();
+            }
+        }
+
+        [[nodiscard]] inline Bitboard pawns(Color color) const {
+            return forPiece(PieceType::kPawn, color);
+        }
+
+        [[nodiscard]] inline Bitboard alfils(Color color) const {
+            return forPiece(PieceType::kAlfil, color);
+        }
+
+        [[nodiscard]] inline Bitboard ferzes(Color color) const {
+            return forPiece(PieceType::kFerz, color);
+        }
+
+        [[nodiscard]] inline Bitboard knights(Color color) const {
+            return forPiece(PieceType::kKnight, color);
+        }
+
+        [[nodiscard]] inline Bitboard rooks(Color color) const {
+            return forPiece(PieceType::kRook, color);
+        }
+
+        [[nodiscard]] inline Bitboard kings(Color color) const {
+            return forPiece(PieceType::kKing, color);
+        }
+
+        [[nodiscard]] inline Bitboard minors(Color color) const {
+            return color == Color::kBlack ? blackMinors() : whiteMinors();
+        }
+
+        [[nodiscard]] inline Bitboard majors(Color color) const {
+            return color == Color::kBlack ? blackMajors() : whiteMajors();
+        }
+
+        [[nodiscard]] inline Bitboard nonPk(Color color) const {
+            return color == Color::kBlack ? blackNonPk() : whiteNonPk();
+        }
+
+        [[nodiscard]] inline bool operator==(const BitboardSet& other) const = default;
+
+    private:
+        std::array<Bitboard, 2> m_colors{};
+        std::array<Bitboard, 6> m_pieces{};
+    };
+
+    class PositionBoards {
+    public:
+        PositionBoards() {
+            m_mailbox.fill(Piece::kNone);
+        }
+
+        [[nodiscard]] inline const BitboardSet& bbs() const {
+            return m_bbs;
+        }
+
+        [[nodiscard]] inline BitboardSet& bbs() {
+            return m_bbs;
+        }
+
+        [[nodiscard]] inline PieceType pieceTypeAt(Square square) const {
+            assert(square != Square::kNone);
+
+            const auto piece = m_mailbox[static_cast<i32>(square)];
+            return piece == Piece::kNone ? PieceType::kNone : pieceType(piece);
+        }
+
+        [[nodiscard]] inline Piece pieceOn(Square square) const {
+            assert(square != Square::kNone);
+            return m_mailbox[static_cast<i32>(square)];
+        }
+
+        [[nodiscard]] inline Piece pieceAt(u32 rank, u32 file) const {
+            return pieceOn(toSquare(rank, file));
+        }
+
+        inline void setPiece(Square square, Piece piece) {
+            assert(square != Square::kNone);
+            assert(piece != Piece::kNone);
+
+            assert(pieceOn(square) == Piece::kNone);
+
+            slot(square) = piece;
+
+            const auto mask = Bitboard::fromSquare(square);
+
+            m_bbs.forPiece(pieceType(piece)) ^= mask;
+            m_bbs.forColor(pieceColor(piece)) ^= mask;
+        }
+
+        inline void movePiece(Square src, Square dst, Piece piece) {
+            assert(src != Square::kNone);
+            assert(dst != Square::kNone);
+
+            if (slot(src) == piece) {
+                [[likely]] slot(src) = Piece::kNone;
+            }
+
+            slot(dst) = piece;
+
+            const auto mask = Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst);
+
+            m_bbs.forPiece(pieceType(piece)) ^= mask;
+            m_bbs.forColor(pieceColor(piece)) ^= mask;
+        }
+
+        inline void moveAndChangePiece(Square src, Square dst, Piece moving, PieceType promo) {
+            assert(src != Square::kNone);
+            assert(dst != Square::kNone);
+            assert(src != dst);
+
+            assert(moving != Piece::kNone);
+            assert(promo != PieceType::kNone);
+
+            assert(pieceOn(src) == moving);
+            assert(slot(src) == moving);
+
+            slot(src) = Piece::kNone;
+            slot(dst) = copyPieceColor(moving, promo);
+
+            m_bbs.forPiece(pieceType(moving))[src] = false;
+            m_bbs.forPiece(promo)[dst] = true;
+
+            const auto mask = Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst);
+            m_bbs.forColor(pieceColor(moving)) ^= mask;
+        }
+
+        inline void removePiece(Square square, Piece piece) {
+            assert(square != Square::kNone);
+            assert(piece != Piece::kNone);
+
+            assert(pieceOn(square) == piece);
+
+            slot(square) = Piece::kNone;
+
+            m_bbs.forPiece(pieceType(piece))[square] = false;
+            m_bbs.forColor(pieceColor(piece))[square] = false;
+        }
+
+        inline void regenFromBbs() {
+            m_mailbox.fill(Piece::kNone);
+
+            for (u32 pieceIdx = 0; pieceIdx < 12; ++pieceIdx) {
+                const auto piece = static_cast<Piece>(pieceIdx);
+
+                auto board = m_bbs.forPiece(piece);
+                while (!board.empty()) {
+                    const auto sq = board.popLowestSquare();
+                    assert(slot(sq) == Piece::kNone);
+                    slot(sq) = piece;
+                }
+            }
+        }
+
+        [[nodiscard]] inline bool operator==(const PositionBoards& other) const = default;
+
+    private:
+        [[nodiscard]] inline Piece& slot(Square square) {
+            return m_mailbox[static_cast<i32>(square)];
+        }
+
+        BitboardSet m_bbs{};
+        std::array<Piece, 64> m_mailbox{};
+    };
+} // namespace oranj

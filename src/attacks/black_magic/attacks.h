@@ -22,35 +22,32 @@
 
 #include <array>
 
-#include "../../core.h"
 #include "../../bitboard.h"
+#include "../../core.h"
+#include "../../util/bits.h"
 #include "../util.h"
 #include "data.h"
-#include "../../util/bits.h"
 
-namespace oranj::attacks
-{
-	extern const std::array<Bitboard, black_magic::RookData.tableSize> RookAttacks;
+namespace oranj::attacks {
+    extern const std::array<Bitboard, black_magic::kRookData.tableSize> g_rookAttacks;
 
-	[[nodiscard]] inline auto getRookIdx(Bitboard occupancy, Square src)
-	{
-		const auto s = static_cast<i32>(src);
+    [[nodiscard]] inline usize getRookIdx(Bitboard occupancy, Square src) {
+        const auto s = static_cast<i32>(src);
 
-		const auto &data = black_magic::RookData.data[s];
+        const auto& data = black_magic::kRookData.data[s];
 
-		const auto magic = black_magic::Magics[s];
-		const auto shift = black_magic::Shifts[s];
+        const auto magic = black_magic::kMagics[s];
+        const auto shift = black_magic::kShifts[s];
 
-		return ((occupancy | data.mask) * magic) >> shift;
-	}
+        return ((occupancy | data.mask) * magic) >> shift;
+    }
 
-	[[nodiscard]] inline auto getRookAttacks(Square src, Bitboard occupancy)
-	{
-		const auto s = static_cast<i32>(src);
+    [[nodiscard]] inline Bitboard getRookAttacks(Square src, Bitboard occupancy) {
+        const auto s = static_cast<i32>(src);
 
-		const auto &data = black_magic::RookData.data[s];
-		const auto idx = getRookIdx(occupancy, src);
+        const auto& data = black_magic::kRookData.data[s];
+        const auto idx = getRookIdx(occupancy, src);
 
-		return RookAttacks[data.offset + idx];
-	}
-}
+        return g_rookAttacks[data.offset + idx];
+    }
+} // namespace oranj::attacks

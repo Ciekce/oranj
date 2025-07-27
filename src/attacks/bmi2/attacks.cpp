@@ -19,40 +19,34 @@
 #include "../attacks.h"
 
 #if OJ_HAS_BMI2
-namespace oranj::attacks
-{
-	using namespace bmi2;
+namespace oranj::attacks {
+    using namespace bmi2;
 
-	namespace
-	{
-		auto generateRookAttacks()
-		{
-			std::array<u16, RookData.tableSize> dst{};
+    namespace {
+        std::array<u16, kRookData.tableSize> generateRookAttacks() {
+            std::array<u16, kRookData.tableSize> dst{};
 
-			for (u32 square = 0; square < 64; ++square)
-			{
-				const auto &data = RookData.data[square];
-				const auto entries = 1 << data.srcMask.popcount();
+            for (u32 square = 0; square < 64; ++square) {
+                const auto& data = kRookData.data[square];
+                const auto entries = 1 << data.srcMask.popcount();
 
-				for (u32 i = 0; i < entries; ++i)
-				{
-					const auto occupancy = util::pdep(i, data.srcMask);
+                for (u32 i = 0; i < entries; ++i) {
+                    const auto occupancy = util::pdep(i, data.srcMask);
 
-					Bitboard attacks{};
+                    Bitboard attacks{};
 
-					for (const auto dir : {offsets::Up, offsets::Down, offsets::Left, offsets::Right})
-					{
-						attacks |= internal::generateSlidingAttacks(static_cast<Square>(square), dir, occupancy);
-					}
+                    for (const auto dir : {offsets::kUp, offsets::kDown, offsets::kLeft, offsets::kRight}) {
+                        attacks |= internal::generateSlidingAttacks(static_cast<Square>(square), dir, occupancy);
+                    }
 
-					dst[data.offset + i] = static_cast<u16>(util::pext(attacks, data.dstMask));
-				}
-			}
+                    dst[data.offset + i] = static_cast<u16>(util::pext(attacks, data.dstMask));
+                }
+            }
 
-			return dst;
-		}
-	}
+            return dst;
+        }
+    } // namespace
 
-	const std::array<u16, RookData.tableSize> RookAttacks = generateRookAttacks();
-}
+    const std::array<u16, kRookData.tableSize> g_rookAttacks = generateRookAttacks();
+} // namespace oranj::attacks
 #endif // OJ_HAS_BMI2

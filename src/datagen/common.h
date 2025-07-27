@@ -20,12 +20,10 @@
 
 #include "../types.h"
 
-namespace oranj::datagen
-{
-	enum class Outcome : u8
-	{
-		WhiteLoss = 0,
-		Draw,
-		WhiteWin
-	};
+namespace oranj::datagen {
+    enum class Outcome : u8 {
+        kWhiteLoss = 0,
+        kDraw,
+        kWhiteWin,
+    };
 }

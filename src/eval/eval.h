@@ -22,77 +22,82 @@
 
 #include <array>
 
-#include "nnue.h"
-#include "../position/position.h"
 #include "../core.h"
 #include "../correction.h"
+#include "../position/position.h"
 #include "../see.h"
+#include "../tunable.h"
+#include "nnue.h"
 
-namespace oranj::eval
-{
-	// black, white
-	using Contempt = std::array<Score, 2>;
+namespace oranj::eval {
+    // black, white
+    using Contempt = std::array<Score, 2>;
 
-	template <bool Correct = true>
-	inline auto adjustEval(const Position &pos, std::span<search::PlayedMove> moves,
-		i32 ply, const CorrectionHistoryTable *correction, i32 eval, i32 *corrDelta = nullptr)
-	{
-		eval = eval * (200 - pos.halfmove()) / 200;
+    template <bool kCorrect = true>
+    inline Score adjustEval(
+        const Position& pos,
+        std::span<search::PlayedMove> moves,
+        i32 ply,
+        const CorrectionHistoryTable* correction,
+        i32 eval,
+        i32* corrDelta = nullptr
+    ) {
+        eval = eval * (200 - pos.halfmove()) / 200;
 
-		if constexpr (Correct)
-		{
-			const auto corrected = correction->correct(pos, moves, ply, eval);
+        if constexpr (kCorrect) {
+            const auto corrected = correction->correct(pos, moves, ply, eval);
 
-			if (corrDelta)
-				*corrDelta = std::abs(eval - corrected);
+            if (corrDelta) {
+                *corrDelta = std::abs(eval - corrected);
+            }
 
-			eval = corrected;
-		}
+            eval = corrected;
+        }
 
-		return std::clamp(eval, -ScoreWin + 1, ScoreWin - 1);
-	}
+        return std::clamp(eval, -kScoreWin + 1, kScoreWin - 1);
+    }
 
-	template <bool Scale>
-	inline auto adjustStatic(const Position &pos, const Contempt &contempt, Score eval)
-	{
-		if constexpr (Scale)
-		{
-			const auto bbs = pos.bbs();
+    template <bool kScale>
+    inline Score adjustStatic(const Position& pos, const Contempt& contempt, Score eval) {
+        using namespace tunable;
 
-			const auto npMaterial
-				= see::values::Alfil  * bbs.alfils ().popcount()
-				+ see::values::Ferz   * bbs.ferzes ().popcount()
-				+ see::values::Knight * bbs.knights().popcount()
-				+ see::values::Rook   * bbs.rooks  ().popcount();
+        if constexpr (kScale) {
+            const auto bbs = pos.bbs();
 
-			eval = eval * (13000 + npMaterial) / 16384;
-		}
+            const auto npMaterial =
+                scalingValueAlfil() * bbs.alfils().popcount() + scalingValueFerz() * bbs.ferzes().popcount()
+                + scalingValueKnight() * bbs.knights().popcount() + scalingValueRook() * bbs.rooks().popcount();
 
-		eval += contempt[static_cast<i32>(pos.toMove())];
+            eval = eval * (materialScalingBase() + npMaterial) / 16384;
+        }
 
-		return std::clamp(eval, -ScoreWin + 1, ScoreWin - 1);
-	}
+        eval += contempt[static_cast<i32>(pos.stm())];
 
-	template <bool Scale = true>
-	inline auto staticEval(const Position &pos, NnueState &nnueState, const Contempt &contempt = {})
-	{
-		auto eval = nnueState.evaluate(pos.bbs(), pos.kings(), pos.toMove());
-		return adjustStatic<Scale>(pos, contempt, eval);
-	}
+        return std::clamp(eval, -kScoreWin + 1, kScoreWin - 1);
+    }
 
-	template <bool Correct = true>
-	inline auto adjustedStaticEval(const Position &pos,
-		std::span<search::PlayedMove> moves, i32 ply, NnueState &nnueState,
-		const CorrectionHistoryTable *correction, const Contempt &contempt = {})
-	{
-		const auto eval = staticEval(pos, nnueState, contempt);
-		return adjustEval<Correct>(pos, moves, ply, correction, eval);
-	}
+    template <bool kScale = true>
+    inline Score staticEval(const Position& pos, NnueState& nnueState, const Contempt& contempt = {}) {
+        auto eval = nnueState.evaluate(pos.bbs(), pos.kings(), pos.stm());
+        return adjustStatic<kScale>(pos, contempt, eval);
+    }
 
-	template <bool Scale = true>
-	inline auto staticEvalOnce(const Position &pos, const Contempt &contempt = {})
-	{
-		auto eval = NnueState::evaluateOnce(pos.bbs(), pos.kings(), pos.toMove());
-		return adjustStatic<Scale>(pos, contempt, eval);
-	}
-}
+    template <bool kCorrect = true>
+    inline Score adjustedStaticEval(
+        const Position& pos,
+        std::span<search::PlayedMove> moves,
+        i32 ply,
+        NnueState& nnueState,
+        const CorrectionHistoryTable* correction,
+        const Contempt& contempt = {}
+    ) {
+        const auto eval = staticEval(pos, nnueState, contempt);
+        return adjustEval<kCorrect>(pos, moves, ply, correction, eval);
+    }
+
+    template <bool kScale = true>
+    inline Score staticEvalOnce(const Position& pos, const Contempt& contempt = {}) {
+        auto eval = NnueState::evaluateOnce(pos.bbs(), pos.kings(), pos.stm());
+        return adjustStatic<kScale>(pos, contempt, eval);
+    }
+} // namespace oranj::eval

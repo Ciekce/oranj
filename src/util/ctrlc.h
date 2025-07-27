@@ -22,10 +22,9 @@
 
 #include <functional>
 
-namespace oranj::util::signal
-{
-	using CtrlCHandler = std::function<void()>;
-	auto addCtrlCHandler(CtrlCHandler handler) -> void;
+namespace oranj::util::signal {
+    using CtrlCHandler = std::function<void()>;
+    void addCtrlCHandler(CtrlCHandler handler);
 
-	auto init() -> void;
-}
+    void init();
+} // namespace oranj::util::signal

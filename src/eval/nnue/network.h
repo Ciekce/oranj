@@ -20,120 +20,55 @@
 
 #include "../../types.h"
 
-#include <tuple>
-#include <utility>
 #include <span>
 
 #include "../../position/boards.h"
 #include "../../util/aligned_array.h"
 
-namespace oranj::eval::nnue
-{
-	template <typename Ft, typename... Layers>
-	class PerspectiveNetwork
-	{
-	private:
-		template <typename Layer>
-		using OutputStorageType = util::AlignedArray<
-		    util::simd::Alignment, typename Layer::OutputType, Layer::OutputCount
-		>;
+namespace oranj::eval::nnue {
+    template <typename Ft, typename OutputBucketing, typename Arch>
+    class PerspectiveNetwork {
+    public:
+        using FeatureTransformer = Ft;
 
-		using LayerStack = std::tuple<Layers...>;
-		using OutputStorage = std::tuple<OutputStorageType<Layers>...>;
+        [[nodiscard]] inline const FeatureTransformer& featureTransformer() const {
+            return m_featureTransformer;
+        }
 
-		static_assert(sizeof...(Layers) > 0);
-		static_assert(std::tuple_element_t<sizeof...(Layers) - 1, LayerStack>::OutputCount == 1);
+        inline util::simd::Array<typename Arch::OutputType, Arch::kOutputCount> propagate(
+            const BitboardSet& bbs,
+            std::span<const typename FeatureTransformer::OutputType, FeatureTransformer::kOutputCount> stmInputs,
+            std::span<const typename FeatureTransformer::OutputType, FeatureTransformer::kOutputCount> nstmInputs
+        ) const {
+            util::simd::Array<typename Arch::OutputType, Arch::kOutputCount> outputs;
 
-	public:
-		using FeatureTransformer = Ft;
+            const auto bucket = OutputBucketing::getBucket(bbs);
+            m_arch.propagate(bucket, stmInputs, nstmInputs, outputs);
 
-		static_assert(FeatureTransformer::OutputCount == std::tuple_element_t<0, LayerStack>::PerspectiveInputCount);
+            return outputs;
+        }
 
-		[[nodiscard]] inline auto featureTransformer() const -> const auto &
-		{
-			return m_featureTransformer;
-		}
+        inline bool readFrom(IParamStream& stream) {
+            if (!m_featureTransformer.readFrom(stream) || !m_arch.readFrom(stream)) {
+                return false;
+            }
 
-		template <usize I>
-		[[nodiscard]] inline auto layer() const -> const auto &
-		{
-			return std::get<I>(m_layers);
-		}
+            if constexpr (Arch::kRequiresFtPermute) {
+                Arch::template permuteFt<typename Ft::WeightType, typename Ft::OutputType>(
+                    m_featureTransformer.weights,
+                    m_featureTransformer.biases
+                );
+            }
 
-		inline auto propagate(const BitboardSet &bbs,
-			std::span<const typename FeatureTransformer::OutputType, FeatureTransformer::OutputCount>  stmInputs,
-			std::span<const typename FeatureTransformer::OutputType, FeatureTransformer::OutputCount> nstmInputs) const
-		{
-			OutputStorage storage{};
+            return true;
+        }
 
-			std::get<0>(m_layers).forward(bbs, stmInputs, nstmInputs, std::get<0>(storage));
-			propagate(storage, bbs, std::make_index_sequence<sizeof...(Layers)>());
+        inline bool writeTo(IParamStream& stream) const {
+            return m_featureTransformer.writeTo(stream) && m_arch.writeTo(stream);
+        }
 
-			return std::get<sizeof...(Layers) - 1>(storage)[0];
-		}
-
-		inline auto readFrom(IParamStream &stream) -> bool
-		{
-			return m_featureTransformer.readFrom(stream)
-				&& readLayersFrom(std::make_index_sequence<sizeof...(Layers)>(), stream);
-		}
-
-		inline auto writeTo(IParamStream &stream) const -> bool
-		{
-			return m_featureTransformer.writeTo(stream)
-				&& writeLayersTo(std::make_index_sequence<sizeof...(Layers)>(), stream);
-		}
-
-	private:
-		template <usize I>
-		inline auto forward(OutputStorage &storage, const BitboardSet &bbs) const
-		{
-			if constexpr (I > 0)
-			{
-				static_assert(std::tuple_element_t<I - 1, LayerStack>::OutputCount
-					== std::tuple_element_t<I, LayerStack>::InputCount);
-
-				auto &layer = std::get<I>(m_layers);
-				layer.forward(bbs, std::get<I - 1>(storage), std::get<I>(storage));
-			}
-		}
-
-		template <usize... Indices>
-		inline auto propagate(OutputStorage &storage,
-			const BitboardSet &bbs, std::index_sequence<Indices...>) const
-		{
-			((forward<Indices>(storage, bbs)), ...);
-		}
-
-		template <usize... Indices>
-		inline auto readLayersFrom(std::index_sequence<Indices...>, IParamStream &stream) -> bool
-		{
-			bool success = true;
-			((success &= std::get<Indices>(m_layers).readFrom(stream)), ...);
-			return success;
-		}
-
-		template <usize... Indices>
-		inline auto writeLayersTo(std::index_sequence<Indices...>, IParamStream &stream) const -> bool
-		{
-			bool success = true;
-			((success &= std::get<Indices>(m_layers).writeTo(stream)), ...);
-			return success;
-		}
-
-		FeatureTransformer m_featureTransformer{};
-		LayerStack m_layers{};
-	};
-
-	template <typename Ft, typename... Layers>
-	inline auto operator>>(std::istream &stream, PerspectiveNetwork<Ft, Layers...> &network) -> std::istream &
-	{
-		return network.readFrom(stream);
-	}
-
-	template <typename Ft, typename... Layers>
-	inline auto operator<<(std::ostream &stream, PerspectiveNetwork<Ft, Layers...> &network) -> std::ostream &
-	{
-		return network.writeTo(stream);
-	}
-}
+    private:
+        FeatureTransformer m_featureTransformer{};
+        Arch m_arch{};
+    };
+} // namespace oranj::eval::nnue

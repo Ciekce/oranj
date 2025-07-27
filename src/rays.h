@@ -22,78 +22,76 @@
 
 #include <array>
 
-#include "core.h"
-#include "bitboard.h"
 #include "attacks/util.h"
+#include "bitboard.h"
+#include "core.h"
 #include "util/multi_array.h"
 
-namespace oranj
-{
-	constexpr auto BetweenRays = []
-	{
-		util::MultiArray<Bitboard, 64, 64> dst{};
+namespace oranj {
+    namespace detail {
+        consteval util::MultiArray<Bitboard, 64, 64> generateBetweenRays() {
+            util::MultiArray<Bitboard, 64, 64> dst{};
 
-		for (i32 from = 0; from < 64; ++from)
-		{
-			const auto srcSquare = static_cast<Square>(from);
-			const auto srcMask = squareBit(srcSquare);
+            for (i32 from = 0; from < 64; ++from) {
+                const auto srcSquare = static_cast<Square>(from);
+                const auto srcMask = squareBit(srcSquare);
 
-			const auto rookAttacks = attacks::EmptyBoardRooks[from];
+                const auto rookAttacks = attacks::kEmptyBoardRooks[from];
 
-			for (i32 to = 0; to < 64; ++to)
-			{
-				if (from == to)
-					continue;
+                for (i32 to = 0; to < 64; ++to) {
+                    if (from == to) {
+                        continue;
+                    }
 
-				const auto dstSquare = static_cast<Square>(to);
-				const auto dstMask = squareBit(dstSquare);
+                    const auto dstSquare = static_cast<Square>(to);
+                    const auto dstMask = squareBit(dstSquare);
 
-				if (rookAttacks[dstSquare])
-					dst[from][to]
-						= attacks::genRookAttacks(srcSquare, dstMask)
-						& attacks::genRookAttacks(dstSquare, srcMask);
-			}
-		}
+                    if (rookAttacks[dstSquare]) {
+                        dst[from][to] =
+                            attacks::genRookAttacks(srcSquare, dstMask) & attacks::genRookAttacks(dstSquare, srcMask);
+                    }
+                }
+            }
 
-		return dst;
-	}();
+            return dst;
+        }
 
-	constexpr auto IntersectingRays = []
-	{
-		util::MultiArray<Bitboard, 64, 64> dst{};
+        consteval util::MultiArray<Bitboard, 64, 64> generateIntersectingRays() {
+            util::MultiArray<Bitboard, 64, 64> dst{};
 
-		for (i32 from = 0; from < 64; ++from)
-		{
-			const auto srcSquare = static_cast<Square>(from);
-			const auto srcMask = squareBit(srcSquare);
+            for (i32 from = 0; from < 64; ++from) {
+                const auto srcSquare = static_cast<Square>(from);
+                const auto srcMask = squareBit(srcSquare);
 
-			const auto rookAttacks = attacks::EmptyBoardRooks[from];
+                const auto rookAttacks = attacks::kEmptyBoardRooks[from];
 
-			for (i32 to = 0; to < 64; ++to)
-			{
-				if (from == to)
-					continue;
+                for (i32 to = 0; to < 64; ++to) {
+                    if (from == to) {
+                        continue;
+                    }
 
-				const auto dstSquare = static_cast<Square>(to);
-				const auto dstMask = squareBit(dstSquare);
+                    const auto dstSquare = static_cast<Square>(to);
+                    const auto dstMask = squareBit(dstSquare);
 
-				if (rookAttacks[dstSquare])
-					dst[from][to]
-						= (srcMask | attacks::genRookAttacks(srcSquare, Bitboard{}))
-						& (dstMask | attacks::genRookAttacks(dstSquare, Bitboard{}));
-			}
-		}
+                    if (rookAttacks[dstSquare]) {
+                        dst[from][to] = (srcMask | attacks::genRookAttacks(srcSquare, Bitboard{}))
+                                      & (dstMask | attacks::genRookAttacks(dstSquare, Bitboard{}));
+                    }
+                }
+            }
 
-		return dst;
-	}();
+            return dst;
+        }
 
-	constexpr auto orthoRayBetween(Square src, Square dst)
-	{
-		return BetweenRays[static_cast<i32>(src)][static_cast<i32>(dst)];
-	}
+        constexpr auto kBetweenRays = detail::generateBetweenRays();
+        constexpr auto kIntersectingRays = detail::generateIntersectingRays();
+    } // namespace detail
 
-	constexpr auto orthoRayIntersecting(Square src, Square dst)
-	{
-		return IntersectingRays[static_cast<i32>(src)][static_cast<i32>(dst)];
-	}
-}
+    constexpr Bitboard orthoRayBetween(Square src, Square dst) {
+        return detail::kBetweenRays[static_cast<i32>(src)][static_cast<i32>(dst)];
+    }
+
+    constexpr Bitboard orthoRayIntersecting(Square src, Square dst) {
+        return detail::kIntersectingRays[static_cast<i32>(src)][static_cast<i32>(dst)];
+    }
+} // namespace oranj

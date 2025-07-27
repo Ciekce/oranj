@@ -18,1086 +18,745 @@
 
 #include "position.h"
 
-#ifndef NDEBUG
-#include <iostream>
-#include <iomanip>
-#include "../uci.h"
-#include "../pretty.h"
-#endif
 #include <algorithm>
-#include <sstream>
 #include <cassert>
 
-#include "../util/parse.h"
-#include "../util/split.h"
 #include "../attacks/attacks.h"
+#include "../cuckoo.h"
 #include "../movegen.h"
 #include "../opts.h"
 #include "../rays.h"
-#include "../cuckoo.h"
-
-namespace oranj
-{
-	namespace
-	{
-		auto scharnaglToBackrank(u32 n)
-		{
-			// https://en.wikipedia.org/wiki/Fischer_random_chess_numbering_scheme#Direct_derivation
-
-			// these are stored with the second knight moved left by an empty square,
-			// because the first knight fills a square before the second knight is placed
-			static constexpr auto N5n = std::array{
-				std::pair{0, 0},
-				std::pair{0, 1},
-				std::pair{0, 2},
-				std::pair{0, 3},
-				std::pair{1, 1},
-				std::pair{1, 2},
-				std::pair{1, 3},
-				std::pair{2, 2},
-				std::pair{2, 3},
-				std::pair{3, 3}
-			};
-
-			assert(n < 960);
-
-			std::array<PieceType, 8> dst{};
-			// no need to fill with empty pieces, because pawns are impossible
-
-			const auto placeInNthFree = [&dst](u32 n, PieceType piece)
-			{
-				for (i32 free = 0, i = 0; i < 8; ++i)
-				{
-					if (dst[i] == PieceType::Pawn
-						&& free++ == n)
-					{
-						dst[i] = piece;
-						break;
-					}
-				}
-			};
-
-			const auto placeInFirstFree = [&dst](PieceType piece)
-			{
-				for (i32 i = 0; i < 8; ++i)
-				{
-					if (dst[i] == PieceType::Pawn)
-					{
-						dst[i] = piece;
-						break;
-					}
-				}
-			};
-
-			const auto n2 = n  / 4;
-			const auto b1 = n  % 4;
-
-			const auto n3 = n2 / 4;
-			const auto b2 = n2 % 4;
-
-			const auto n4 = n3 / 6;
-			const auto  q = n3 % 6;
-
-			dst[b1 * 2 + 1] = PieceType::Alfil;
-			dst[b2 * 2    ] = PieceType::Alfil;
-
-			placeInNthFree(q, PieceType::Ferz);
-
-			const auto [knight1, knight2] = N5n[n4];
-
-			placeInNthFree(knight1, PieceType::Knight);
-			placeInNthFree(knight2, PieceType::Knight);
-
-			placeInFirstFree(PieceType::Rook);
-			placeInFirstFree(PieceType::King);
-			placeInFirstFree(PieceType::Rook);
-
-			return dst;
-		}
-	}
-
-	template auto Position::applyMoveUnchecked<false, false>(Move, eval::NnueState *) -> void;
-	template auto Position::applyMoveUnchecked<true, false>(Move, eval::NnueState *) -> void;
-	template auto Position::applyMoveUnchecked<false, true>(Move, eval::NnueState *) -> void;
-	template auto Position::applyMoveUnchecked<true, true>(Move, eval::NnueState *) -> void;
-
-	template auto Position::popMove<false>(eval::NnueState *) -> void;
-	template auto Position::popMove<true>(eval::NnueState *) -> void;
-
-	template auto Position::setPiece<false>(Piece, Square) -> void;
-	template auto Position::setPiece<true>(Piece, Square) -> void;
-
-	template auto Position::removePiece<false>(Piece, Square) -> void;
-	template auto Position::removePiece<true>(Piece, Square) -> void;
-
-	template auto Position::movePieceNoCap<false>(Piece, Square, Square) -> void;
-	template auto Position::movePieceNoCap<true>(Piece, Square, Square) -> void;
-
-	template auto Position::movePiece<false, false>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::movePiece<true, false>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::movePiece<false, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::movePiece<true, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-
-	template auto Position::promotePawn<false, false>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::promotePawn<true, false>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::promotePawn<false, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-	template auto Position::promotePawn<true, true>(Piece, Square, Square, eval::NnueUpdates &) -> Piece;
-
-	Position::Position()
-	{
-		m_states.reserve(256);
-		m_keys.reserve(512);
-
-		m_states.push_back({});
-	}
-
-	auto Position::resetToStarting() -> void
-	{
-		m_states.resize(1);
-		m_keys.clear();
-
-		auto &state = currState();
-		state = BoardState{};
-
-		auto &bbs = state.boards.bbs();
-
-		bbs.forPiece(PieceType::  Pawn) = U64(0x00FF00000000FF00);
-		bbs.forPiece(PieceType:: Alfil) = U64(0x2400000000000024);
-		bbs.forPiece(PieceType::  Ferz) = U64(0x1000000000000010);
-		bbs.forPiece(PieceType::Knight) = U64(0x4200000000000042);
-		bbs.forPiece(PieceType::  Rook) = U64(0x8100000000000081);
-		bbs.forPiece(PieceType::  King) = U64(0x0800000000000008);
-
-		bbs.forColor(Color::Black) = U64(0xFFFF000000000000);
-		bbs.forColor(Color::White) = U64(0x000000000000FFFF);
-
-		m_blackToMove = false;
-		m_fullmove = 1;
-
-		regen();
-	}
-
-	auto Position::resetFromFen(const std::string &fen) -> bool
-	{
-		const auto tokens = split::split(fen, ' ');
-
-		if (tokens.size() > 6)
-		{
-			std::cerr << "excess tokens after fullmove number in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (tokens.size() == 5)
-		{
-			std::cerr << "missing fullmove number in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (tokens.size() == 4)
-		{
-			std::cerr << "missing halfmove clock in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (tokens.size() == 3)
-		{
-			std::cerr << "missing fourth field in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (tokens.size() == 2)
-		{
-			std::cerr << "missing third field in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (tokens.size() == 1)
-		{
-			std::cerr << "missing next move color in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (tokens.empty())
-		{
-			std::cerr << "missing ranks in fen " << fen << std::endl;
-			return false;
-		}
-
-		BoardState newState{};
-		auto &newBbs = newState.boards.bbs();
-
-		u32 rankIdx = 0;
-
-		const auto ranks = split::split(tokens[0], '/');
-		for (const auto &rank : ranks)
-		{
-			if (rankIdx >= 8)
-			{
-				std::cerr << "too many ranks in fen " << fen << std::endl;
-				return false;
-			}
-
-			u32 fileIdx = 0;
-
-			for (const auto c : rank)
-			{
-				if (fileIdx >= 8)
-				{
-					std::cerr << "too many files in rank " << rankIdx << " in fen " << fen << std::endl;
-					return false;
-				}
-
-				if (const auto emptySquares = util::tryParseDigit(c))
-					fileIdx += *emptySquares;
-				else if (const auto piece = pieceFromChar(c); piece != Piece::None)
-				{
-					newState.boards.setPiece(toSquare(7 - rankIdx, fileIdx), piece);
-					++fileIdx;
-				}
-				else
-				{
-					std::cerr << "invalid piece character " << c << " in fen " << fen << std::endl;
-					return false;
-				}
-			}
-
-			// last character was a digit
-			if (fileIdx > 8)
-			{
-				std::cerr << "too many files in rank " << rankIdx << " in fen " << fen << std::endl;
-				return false;
-			}
-
-			if (fileIdx < 8)
-			{
-				std::cerr << "not enough files in rank " << rankIdx << " in fen " << fen << std::endl;
-				return false;
-			}
-
-			++rankIdx;
-		}
-
-		if (const auto blackKingCount = newBbs.forPiece(Piece::BlackKing).popcount();
-			blackKingCount != 1)
-		{
-			std::cerr << "black must have exactly 1 king, " << blackKingCount << " in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (const auto whiteKingCount = newBbs.forPiece(Piece::WhiteKing).popcount();
-			whiteKingCount != 1)
-		{
-			std::cerr << "white must have exactly 1 king, " << whiteKingCount << " in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (newBbs.occupancy().popcount() > 32)
-		{
-			std::cerr << "too many pieces in fen " << fen << std::endl;
-			return false;
-		}
-
-		const auto &color = tokens[1];
-
-		if (color.length() != 1)
-		{
-			std::cerr << "invalid next move color in fen " << fen << std::endl;
-			return false;
-		}
-
-		bool newBlackToMove = false;
-
-		switch (color[0])
-		{
-		case 'b': newBlackToMove = true; break;
-		case 'w': break;
-		default:
-			std::cerr << "invalid next move color in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (const auto stm = newBlackToMove ? Color::Black : Color::White;
-			isAttacked<false>(newState, stm,
-				newBbs.forPiece(PieceType::King, oppColor(stm)).lowestSquare(),
-				stm))
-		{
-			std::cerr << "opponent must not be in check" << std::endl;
-			return false;
-		}
-
-		if (tokens[2] != "-")
-		{
-			std::cerr << "invalid 3rd field in fen " << fen << std::endl;
-			return false;
-		}
-
-		if (tokens[3] != "-")
-		{
-			std::cerr << "invalid 4th field in fen " << fen << std::endl;
-			return false;
-		}
-
-		const auto &halfmoveStr = tokens[4];
-
-		if (const auto halfmove = util::tryParseU32(halfmoveStr))
-			newState.halfmove = *halfmove;
-		else
-		{
-			std::cerr << "invalid halfmove clock in fen " << fen << std::endl;
-			return false;
-		}
-
-		const auto &fullmoveStr = tokens[5];
-
-		u32 newFullmove;
-
-		if (const auto fullmove = util::tryParseU32(fullmoveStr))
-			newFullmove = *fullmove;
-		else
-		{
-			std::cerr << "invalid fullmove number in fen " << fen << std::endl;
-			return false;
-		}
-
-		m_states.resize(1);
-		m_keys.clear();
-
-		m_blackToMove = newBlackToMove;
-		m_fullmove = newFullmove;
-
-		currState() = newState;
-
-		regen();
-
-		return true;
-	}
-
-	auto Position::resetFromFrcIndex(u32 n) -> bool
-	{
-		assert(g_opts.chess960);
-
-		if (n >= 960)
-		{
-			std::cerr << "invalid frc position index " << n << std::endl;
-			return false;
-		}
-
-		m_states.resize(1);
-		m_keys.clear();
-
-		auto &state = currState();
-		state = BoardState{};
-
-		auto &bbs = state.boards.bbs();
-
-		bbs.forPiece(PieceType::Pawn) = U64(0x00FF00000000FF00);
-
-		bbs.forColor(Color::Black) = U64(0x00FF000000000000);
-		bbs.forColor(Color::White) = U64(0x000000000000FF00);
-
-		const auto backrank = scharnaglToBackrank(n);
-
-		for (i32 i = 0; i < 8; ++i)
-		{
-			const auto blackSquare = toSquare(7, i);
-			const auto whiteSquare = toSquare(0, i);
-
-			state.boards.setPiece(blackSquare, colorPiece(backrank[i], Color::Black));
-			state.boards.setPiece(whiteSquare, colorPiece(backrank[i], Color::White));
-		}
-
-		m_blackToMove = false;
-		m_fullmove = 1;
-
-		regen();
-
-		return true;
-	}
-
-	auto Position::resetFromDfrcIndex(u32 n) -> bool
-	{
-		assert(g_opts.chess960);
-
-		if (n >= 960 * 960)
-		{
-			std::cerr << "invalid dfrc position index " << n << std::endl;
-			return false;
-		}
-
-		m_states.resize(1);
-		m_keys.clear();
-
-		auto &state = currState();
-		state = BoardState{};
-
-		auto &bbs = state.boards.bbs();
-
-		bbs.forPiece(PieceType::Pawn) = U64(0x00FF00000000FF00);
-
-		bbs.forColor(Color::Black) = U64(0x00FF000000000000);
-		bbs.forColor(Color::White) = U64(0x000000000000FF00);
-
-		const auto blackBackrank = scharnaglToBackrank(n / 960);
-		const auto whiteBackrank = scharnaglToBackrank(n % 960);
-
-		for (i32 i = 0; i < 8; ++i)
-		{
-			const auto blackSquare = toSquare(7, i);
-			const auto whiteSquare = toSquare(0, i);
-
-			state.boards.setPiece(blackSquare, colorPiece(blackBackrank[i], Color::Black));
-			state.boards.setPiece(whiteSquare, colorPiece(whiteBackrank[i], Color::White));
-		}
-
-		m_blackToMove = false;
-		m_fullmove = 1;
-
-		regen();
-
-		return true;
-	}
-
-	auto Position::copyStateFrom(const Position &other) -> void
-	{
-		m_states.clear();
-		m_keys.clear();
-
-		m_states.push_back(other.currState());
-
-		m_blackToMove = other.m_blackToMove;
-		m_fullmove = other.m_fullmove;
-	}
-
-	template <bool UpdateNnue, bool StateHistory>
-	auto Position::applyMoveUnchecked(Move move, eval::NnueState *nnueState) -> void
-	{
-		if constexpr (UpdateNnue)
-			assert(nnueState != nullptr);
-
-		auto &prevState = currState();
-
-		if constexpr (StateHistory)
-		{
-			assert(m_states.size() < m_states.capacity());
-			m_states.push_back(prevState);
-		}
-
-		m_keys.push_back(prevState.keys.all);
-
-		auto &state = currState();
-
-		m_blackToMove = !m_blackToMove;
-
-		state.keys.flipStm();
-
-		const auto stm = opponent();
-
-		if (stm == Color::Black)
-			++m_fullmove;
-
-		if (!move)
-		{
-			state.pinned = calcPinned();
-			state.threats = calcThreats();
-
-			return;
-		}
-
-		const auto moveType = move.type();
-
-		const auto moveSrc = move.src();
-		const auto moveDst = move.dst();
-
-		const auto moving = state.boards.pieceAt(moveSrc);
-
-		eval::NnueUpdates updates{};
-		auto captured = Piece::None;
-
-		switch (moveType)
-		{
-		case MoveType::Standard:
-			captured = movePiece<true, UpdateNnue>(moving, moveSrc, moveDst, updates);
-			break;
-		case MoveType::Promotion:
-			captured = promotePawn<true, UpdateNnue>(moving, moveSrc, moveDst, updates);
-			break;
-		}
-
-		assert(pieceTypeOrNone(captured) != PieceType::King);
-
-		if constexpr (UpdateNnue)
-			nnueState->pushUpdates<!StateHistory>(updates, state.boards.bbs(), state.kings);
-
-		if (captured == Piece::None
-			&& pieceType(moving) != PieceType::Pawn)
-			++state.halfmove;
-		else state.halfmove = 0;
-
-		state.checkers = calcCheckers();
-		state.pinned = calcPinned();
-		state.threats = calcThreats();
-	}
-
-	template <bool UpdateNnue>
-	auto Position::popMove(eval::NnueState *nnueState) -> void
-	{
-		assert(m_states.size() > 1 && "popMove() with no previous move?");
-
-		if constexpr (UpdateNnue)
-		{
-			assert(nnueState != nullptr);
-			nnueState->pop();
-		}
-
-		m_states.pop_back();
-		m_keys.pop_back();
-
-		m_blackToMove = !m_blackToMove;
-
-		if (toMove() == Color::Black)
-			--m_fullmove;
-	}
-
-	auto Position::clearStateHistory() -> void
-	{
-		const auto state = currState();
-		m_states.resize(1);
-		currState() = state;
-	}
-
-	auto Position::isPseudolegal(Move move) const -> bool
-	{
-		assert(move != NullMove);
-
-		const auto &state = currState();
-
-		const auto us = toMove();
-
-		const auto src = move.src();
-		const auto srcPiece = state.boards.pieceAt(src);
-
-		if (srcPiece == Piece::None || pieceColor(srcPiece) != us)
-			return false;
-
-		const auto dst = move.dst();
-		const auto dstPiece = state.boards.pieceAt(dst);
-
-		// we're capturing something
-		if (dstPiece != Piece::None
-			// we're capturing our own piece
-			&& (pieceColor(dstPiece) == us
-				// or trying to capture a king
-				|| pieceType(dstPiece) == PieceType::King))
-			return false;
-
-		const auto srcPieceType = pieceType(srcPiece);
-		const auto them = oppColor(us);
-		const auto occ = state.boards.bbs().occupancy();
-
-		if (srcPieceType == PieceType::Pawn)
-		{
-			const auto srcRank = move.srcRank();
-			const auto dstRank = move.dstRank();
-
-			// backwards move
-			if ((us == Color::Black && dstRank >= srcRank)
-				|| (us == Color::White && dstRank <= srcRank))
-				return false;
-
-			const auto promoRank = relativeRank(us, 7);
-
-			// non-promotion move to back rank, or promotion move to any other rank
-			if (move.isPromo() != (dstRank == promoRank))
-				return false;
-
-			// sideways move
-			if (move.srcFile() != move.dstFile())
-			{
-				// not valid attack
-				if (!(attacks::getPawnAttacks(src, us) & state.boards.bbs().forColor(them))[dst])
-					return false;
-			}
-			// forward move onto a piece
-			else if (dstPiece != Piece::None)
-				return false;
-
-			if (std::abs(dstRank - srcRank) > 1)
-				return false;
-		}
-		else
-		{
-			if (move.isPromo())
-				return false;
-
-			Bitboard attacks{};
-
-			switch (srcPieceType)
-			{
-			case PieceType:: Alfil: attacks = attacks::getAlfilAttacks(src); break;
-			case PieceType::  Ferz: attacks = attacks::getFerzAttacks(src); break;
-			case PieceType::Knight: attacks = attacks::getKnightAttacks(src); break;
-			case PieceType::  Rook: attacks = attacks::getRookAttacks(src, occ); break;
-			case PieceType::  King: attacks = attacks::getKingAttacks(src); break;
-			default: __builtin_unreachable();
-			}
-
-			if (!attacks[dst])
-				return false;
-		}
-
-		return true;
-	}
-
-	// This does *not* check for pseudolegality, moves are assumed to be pseudolegal
-	auto Position::isLegal(Move move) const -> bool
-	{
-		assert(move != NullMove);
-
-		const auto us = toMove();
-		const auto them = oppColor(us);
-
-		const auto &state = currState();
-		const auto &bbs = state.boards.bbs();
-
-		const auto src = move.src();
-		const auto dst = move.dst();
-
-		const auto king = state.kings.color(us);
-
-		const auto moving = state.boards.pieceAt(src);
-
-		if (pieceType(moving) == PieceType::King)
-		{
-			const auto kinglessOcc = bbs.occupancy() ^ bbs.kings(us);
-
-			return !state.threats[move.dst()]
-				&& (attacks::getRookAttacks(dst, kinglessOcc) & bbs.rooks(them)).empty();
-		}
-
-		// multiple checks can only be evaded with a king move
-		if (state.checkers.multiple()
-			|| state.pinned[src] && !orthoRayIntersecting(src, dst)[king])
-			return false;
-
-		if (state.checkers.empty())
-			return true;
-
-		const auto checker = state.checkers.lowestSquare();
-		return (orthoRayBetween(king, checker) | Bitboard::fromSquare(checker))[dst];
-	}
-
-	// see comment in cuckoo.cpp
-	auto Position::hasCycle(i32 ply) const -> bool
-	{
-		const auto &state = currState();
-
-		const auto end = std::min<i32>(state.halfmove, static_cast<i32>(m_keys.size()));
-
-		if (end < 3)
-			return false;
-
-		const auto S = [this](i32 d)
-		{
-			return m_keys[m_keys.size() - d];
-		};
-
-		const auto occ = state.boards.bbs().occupancy();
-		const auto originalKey = state.keys.all;
-
-		auto other = ~(originalKey ^ S(1));
-
-		for (i32 d = 3; d <= end; d += 2)
-		{
-			const auto currKey = S(d);
-
-			other ^= ~(currKey ^ S(d - 1));
-			if (other != 0)
-				continue;
-
-			const auto diff = originalKey ^ currKey;
-
-			u32 slot = cuckoo::h1(diff);
-
-			if (diff != cuckoo::keys[slot])
-				slot = cuckoo::h2(diff);
-
-			if (diff != cuckoo::keys[slot])
-				continue;
-
-			const auto move = cuckoo::moves[slot];
-
-			if ((occ & orthoRayBetween(move.src(), move.dst())).empty())
-			{
-				// repetition is after root, done
-				if (ply > d)
-					return true;
-
-				auto piece = state.boards.pieceAt(move.src());
-				if (piece == Piece::None)
-					piece = state.boards.pieceAt(move.dst());
-
-				assert(piece != Piece::None);
-
-				return pieceColor(piece) == toMove();
-			}
-		}
-
-		return false;
-	}
-
-	auto Position::isDrawn(bool threefold) const -> bool
-	{
-		const auto halfmove = currState().halfmove;
-
-		if (halfmove >= 140)
-		{
-			if (!isCheck())
-				return true;
-
-			//TODO there's a speedup possible here, but
-			// it requires a lot of movegen refactoring
-			ScoredMoveList moves{};
-			generateAll(moves, *this);
-
-			return std::ranges::any_of(moves, [this](const auto move)
-			{
-				return isLegal(move.move);
-			});
-		}
-
-		const auto currKey = currState().keys.all;
-		const auto limit = std::max(0, static_cast<i32>(m_keys.size()) - halfmove - 2);
+#include "../util/parse.h"
+#include "../util/split.h"
 
-		i32 repetitionsLeft = threefold ? 2 : 1;
+namespace oranj {
+    template Position Position::applyMove<NnueUpdateAction::kNone>(Move, eval::NnueState*) const;
+    template Position Position::applyMove<NnueUpdateAction::kQueue>(Move, eval::NnueState*) const;
+    template Position Position::applyMove<NnueUpdateAction::kApply>(Move, eval::NnueState*) const;
 
-		for (auto i = static_cast<i32>(m_keys.size()) - 4; i >= limit; i -= 2)
-		{
-			if (m_keys[i] == currKey
-				&& --repetitionsLeft == 0)
-				return true;
-		}
+    template void Position::setPiece<false>(Piece, Square);
+    template void Position::setPiece<true>(Piece, Square);
 
-		const auto &bbs = this->bbs();
+    template void Position::removePiece<false>(Piece, Square);
+    template void Position::removePiece<true>(Piece, Square);
 
-		// KK
-		if (bbs.occupancy() == bbs.kings())
-			return true;
+    template void Position::movePieceNoCap<false>(Piece, Square, Square);
+    template void Position::movePieceNoCap<true>(Piece, Square, Square);
 
-		//TODO more?
+    template Piece Position::movePiece<false, false>(Piece, Square, Square, eval::NnueUpdates&);
+    template Piece Position::movePiece<true, false>(Piece, Square, Square, eval::NnueUpdates&);
+    template Piece Position::movePiece<false, true>(Piece, Square, Square, eval::NnueUpdates&);
+    template Piece Position::movePiece<true, true>(Piece, Square, Square, eval::NnueUpdates&);
 
-		return false;
-	}
-
-	auto Position::toFen() const -> std::string
-	{
-		const auto &state = currState();
+    template Piece Position::promotePawn<false, false>(Piece, Square, Square, eval::NnueUpdates&);
+    template Piece Position::promotePawn<true, false>(Piece, Square, Square, eval::NnueUpdates&);
+    template Piece Position::promotePawn<false, true>(Piece, Square, Square, eval::NnueUpdates&);
+    template Piece Position::promotePawn<true, true>(Piece, Square, Square, eval::NnueUpdates&);
 
-		std::ostringstream fen{};
+    template <NnueUpdateAction kNnueAction>
+    Position Position::applyMove(Move move, eval::NnueState* nnueState) const {
+        static constexpr bool kUpdateNnue = kNnueAction != NnueUpdateAction::kNone;
 
-		for (i32 rank = 7; rank >= 0; --rank)
-		{
-			for (i32 file = 0; file < 8; ++file)
-			{
-				if (state.boards.pieceAt(rank, file) == Piece::None)
-				{
-					u32 emptySquares = 1;
-					for (; file < 7 && state.boards.pieceAt(rank, file + 1) == Piece::None; ++file, ++emptySquares) {}
+        if constexpr (kUpdateNnue) {
+            assert(nnueState != nullptr);
+        }
 
-					fen << static_cast<char>('0' + emptySquares);
-				}
-				else fen << pieceToChar(state.boards.pieceAt(rank, file));
-			}
+        auto newPos = *this;
 
-			if (rank > 0)
-				fen << '/';
-		}
+        newPos.m_stm = oppColor(m_stm);
+        newPos.m_keys.flipStm();
 
-		fen << (toMove() == Color::White ? " w " : " b ");
+        const auto stm = newPos.nstm();
+        const auto nstm = oppColor(stm);
 
-		fen << " - -";
+        if (stm == Color::kBlack) {
+            ++newPos.m_fullmove;
+        }
 
-		fen << ' ' << state.halfmove;
-		fen << ' ' << m_fullmove;
+        if (!move) {
+            newPos.m_pinned = newPos.calcPinned();
+            newPos.m_threats = newPos.calcThreats();
 
-		return fen.str();
-	}
+            return newPos;
+        }
+
+        const auto moveSrc = move.fromSq();
+        const auto moveDst = move.toSq();
+
+        const auto moving = m_boards.pieceOn(moveSrc);
+
+        eval::NnueUpdates updates{};
+        auto captured = Piece::kNone;
+
+        if (move.isPromo()) {
+            captured = newPos.promotePawn<true, kUpdateNnue>(moving, moveSrc, moveDst, updates);
+        } else {
+            captured = newPos.movePiece<true, kUpdateNnue>(moving, moveSrc, moveDst, updates);
+        }
+
+        assert(pieceTypeOrNone(captured) != PieceType::kKing);
+
+        if constexpr (kUpdateNnue) {
+            nnueState->pushUpdates<kNnueAction == NnueUpdateAction::kApply>(updates, m_boards.bbs(), m_kings);
+        }
+
+        if (captured == Piece::kNone && pieceType(moving) != PieceType::kPawn) {
+            ++newPos.m_halfmove;
+        } else {
+            newPos.m_halfmove = 0;
+        }
+
+        newPos.m_checkers = newPos.calcCheckers();
+        newPos.m_pinned = newPos.calcPinned();
+        newPos.m_threats = newPos.calcThreats();
+
+        return newPos;
+    }
+
+    bool Position::isPseudolegal(Move move) const {
+        assert(move != kNullMove);
+
+        const auto us = stm();
+
+        const auto src = move.fromSq();
+        const auto srcPiece = m_boards.pieceOn(src);
+
+        if (srcPiece == Piece::kNone || pieceColor(srcPiece) != us) {
+            return false;
+        }
+
+        const auto dst = move.toSq();
+        const auto dstPiece = m_boards.pieceOn(dst);
+
+        // we're capturing our own piece or trying to capture a king
+        if (dstPiece != Piece::kNone && (pieceColor(dstPiece) == us || pieceType(dstPiece) == PieceType::kKing)) {
+            return false;
+        }
+
+        const auto srcPieceType = pieceType(srcPiece);
+        const auto them = oppColor(us);
+        const auto occ = m_boards.bbs().occupancy();
+
+        if (srcPieceType == PieceType::kPawn) {
+            const auto srcRank = move.fromSqRank();
+            const auto dstRank = move.toSqRank();
+
+            // backwards move
+            if ((us == Color::kBlack && dstRank >= srcRank) || (us == Color::kWhite && dstRank <= srcRank)) {
+                return false;
+            }
+
+            const auto promoRank = relativeRank(us, 7);
+
+            // non-promotion move to back rank, or promotion move to any other rank
+            if (move.isPromo() != (dstRank == promoRank)) {
+                return false;
+            }
+
+            // sideways move
+            if (move.fromSqFile() != move.toSqFile()) {
+                // not valid attack
+                if (!(attacks::getPawnAttacks(src, us) & m_boards.bbs().forColor(them))[dst]) {
+                    return false;
+                }
+            } else if (dstPiece != Piece::kNone) {
+                // forward move onto a piece
+                return false;
+            }
+
+            if (std::abs(dstRank - srcRank) > 1) {
+                return false;
+            }
+        } else {
+            if (move.isPromo()) {
+                return false;
+            }
+
+            Bitboard attacks{};
+
+            switch (srcPieceType) {
+                case PieceType::kAlfil:
+                    attacks = attacks::getAlfilAttacks(src);
+                    break;
+                case PieceType::kFerz:
+                    attacks = attacks::getFerzAttacks(src);
+                    break;
+                case PieceType::kKnight:
+                    attacks = attacks::getKnightAttacks(src);
+                    break;
+                case PieceType::kRook:
+                    attacks = attacks::getRookAttacks(src, occ);
+                    break;
+                case PieceType::kKing:
+                    attacks = attacks::getKingAttacks(src);
+                    break;
+                default:
+                    __builtin_unreachable();
+            }
+
+            if (!attacks[dst]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // This does *not* check for pseudolegality, moves are assumed to be pseudolegal
+    bool Position::isLegal(Move move) const {
+        assert(move != kNullMove);
+
+        const auto us = stm();
+        const auto them = oppColor(us);
+
+        const auto& bbs = m_boards.bbs();
+
+        const auto src = move.fromSq();
+        const auto dst = move.toSq();
+
+        const auto king = m_kings.color(us);
+
+        const auto moving = m_boards.pieceOn(src);
+
+        if (pieceType(moving) == PieceType::kKing) {
+            const auto kinglessOcc = bbs.occupancy() ^ bbs.kings(us);
+            return !m_threats[move.toSq()] && (attacks::getRookAttacks(dst, kinglessOcc) & bbs.rooks(them)).empty();
+        }
+
+        // multiple checks can only be evaded with a king move
+        if (m_checkers.multiple() || pinned(us)[src] && !orthoRayIntersecting(src, dst)[king]) {
+            return false;
+        }
+
+        if (m_checkers.empty()) {
+            return true;
+        }
+
+        const auto checker = m_checkers.lowestSquare();
+        return (orthoRayBetween(king, checker) | Bitboard::fromSquare(checker))[dst];
+    }
+
+    // see comment in cuckoo.cpp
+    bool Position::hasCycle(i32 ply, std::span<const u64> keys) const {
+        const auto end = std::min<i32>(m_halfmove, static_cast<i32>(keys.size()));
+
+        if (end < 3) {
+            return false;
+        }
+
+        const auto S = [&](i32 d) { return keys[keys.size() - d]; };
+
+        const auto occ = m_boards.bbs().occupancy();
+        const auto originalKey = m_keys.all;
+
+        auto other = ~(originalKey ^ S(1));
+
+        for (i32 d = 3; d <= end; d += 2) {
+            const auto currKey = S(d);
+
+            other ^= ~(currKey ^ S(d - 1));
+            if (other != 0) {
+                continue;
+            }
+
+            const auto diff = originalKey ^ currKey;
+
+            u32 slot = cuckoo::h1(diff);
+
+            if (diff != cuckoo::keys[slot]) {
+                slot = cuckoo::h2(diff);
+            }
 
-	template <bool UpdateKey>
-	auto Position::setPiece(Piece piece, Square square) -> void
-	{
-		assert(piece != Piece::None);
-		assert(square != Square::None);
+            if (diff != cuckoo::keys[slot]) {
+                continue;
+            }
+
+            const auto move = cuckoo::moves[slot];
+
+            if ((occ & orthoRayBetween(move.fromSq(), move.toSq())).empty()) {
+                // repetition is after root, done
+                if (ply > d) {
+                    return true;
+                }
 
-		assert(pieceType(piece) != PieceType::King);
+                auto piece = m_boards.pieceOn(move.fromSq());
+                if (piece == Piece::kNone) {
+                    piece = m_boards.pieceOn(move.toSq());
+                }
+
+                assert(piece != Piece::kNone);
 
-		auto &state = currState();
+                return pieceColor(piece) == stm();
+            }
+        }
 
-		state.boards.setPiece(square, piece);
+        return false;
+    }
 
-		if constexpr (UpdateKey)
-			state.keys.flipPiece(piece, square);
-	}
+    bool Position::isDrawn(i32 ply, std::span<const u64> keys) const {
+        const auto halfmove = m_halfmove;
 
-	template <bool UpdateKey>
-	auto Position::removePiece(Piece piece, Square square) -> void
-	{
-		assert(piece != Piece::None);
-		assert(square != Square::None);
+        if (halfmove >= 140) {
+            if (!isCheck()) {
+                return true;
+            }
 
-		assert(pieceType(piece) != PieceType::King);
+            //TODO there's a speedup possible here, but
+            // it requires a lot of movegen refactoring
+            ScoredMoveList moves{};
+            generateAll(moves, *this);
 
-		auto &state = currState();
+            return std::ranges::any_of(moves, [this](const auto move) { return isLegal(move.move); });
+        }
 
-		state.boards.removePiece(square, piece);
+        const auto currKey = m_keys.all;
+        const auto limit = std::max(0, static_cast<i32>(keys.size()) - halfmove - 2);
 
-		if constexpr (UpdateKey)
-			state.keys.flipPiece(piece, square);
-	}
+        ply -= 4;
 
-	template <bool UpdateKey>
-	auto Position::movePieceNoCap(Piece piece, Square src, Square dst) -> void
-	{
-		assert(piece != Piece::None);
+        i32 repetitions = 0;
 
-		assert(src != Square::None);
-		assert(dst != Square::None);
+        for (auto i = static_cast<i32>(keys.size()) - 4; i >= limit; i -= 2, ply -= 2) {
+            // require a threefold repetition before root
+            if (keys[i] == currKey && ++repetitions == 1 + (ply < 0)) {
+                return true;
+            }
+        }
 
-		if (src == dst)
-			return;
+        const auto& bbs = this->bbs();
 
-		auto &state = currState();
+        // KK
+        if (bbs.occupancy() == bbs.kings()) {
+            return true;
+        }
 
-		state.boards.movePiece(src, dst, piece);
+        //TODO more?
 
-		if (pieceType(piece) == PieceType::King)
-		{
-			const auto color = pieceColor(piece);
-			state.kings.color(color) = dst;
-		}
+        return false;
+    }
 
-		if constexpr (UpdateKey)
-			state.keys.movePiece(piece, src, dst);
-	}
+    std::string Position::toFen() const {
+        std::string fen{};
+        auto itr = std::back_inserter(fen);
 
-	template <bool UpdateKey, bool UpdateNnue>
-	auto Position::movePiece(Piece piece, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece
-	{
-		assert(piece != Piece::None);
+        for (i32 rank = 7; rank >= 0; --rank) {
+            for (i32 file = 0; file < 8; ++file) {
+                if (m_boards.pieceAt(rank, file) == Piece::kNone) {
+                    u32 emptySquares = 1;
+                    for (; file < 7 && m_boards.pieceAt(rank, file + 1) == Piece::kNone; ++file, ++emptySquares) {
+                    }
 
-		assert(src != Square::None);
-		assert(dst != Square::None);
-		assert(src != dst);
+                    fmt::format_to(itr, "{}", static_cast<char>('0' + emptySquares));
+                } else {
+                    fmt::format_to(itr, "{}", m_boards.pieceAt(rank, file));
+                }
+            }
 
-		auto &state = currState();
+            if (rank > 0) {
+                fmt::format_to(itr, "/");
+            }
+        }
 
-		const auto captured = state.boards.pieceAt(dst);
+        fmt::format_to(itr, "{}", stm() == Color::kWhite ? " w " : " b ");
 
-		if (captured != Piece::None)
-		{
-			assert(pieceType(captured) != PieceType::King);
+        fmt::format_to(itr, " - -");
 
-			state.boards.removePiece(dst, captured);
+        fmt::format_to(itr, " {} {}", m_halfmove, m_fullmove);
 
-			// NNUE update done below
+        return fen;
+    }
 
-			if constexpr (UpdateKey)
-				state.keys.flipPiece(captured, dst);
-		}
+    template <bool kUpdateKey>
+    void Position::setPiece(Piece piece, Square square) {
+        assert(piece != Piece::kNone);
+        assert(square != Square::kNone);
 
-		state.boards.movePiece(src, dst, piece);
+        assert(pieceType(piece) != PieceType::kKing);
 
-		if (pieceType(piece) == PieceType::King)
-		{
-			const auto color = pieceColor(piece);
+        m_boards.setPiece(square, piece);
 
-			if constexpr (UpdateNnue)
-			{
-				if (eval::InputFeatureSet::refreshRequired(color, state.kings.color(color), dst))
-					nnueUpdates.setRefresh(color);
-			}
+        if constexpr (kUpdateKey) {
+            m_keys.flipPiece(piece, square);
+        }
+    }
 
-			state.kings.color(color) = dst;
-		}
+    template <bool kUpdateKey>
+    void Position::removePiece(Piece piece, Square square) {
+        assert(piece != Piece::kNone);
+        assert(square != Square::kNone);
 
-		if constexpr (UpdateNnue)
-		{
-			nnueUpdates.pushSubAdd(piece, src, dst);
+        assert(pieceType(piece) != PieceType::kKing);
 
-			if (captured != Piece::None)
-				nnueUpdates.pushSub(captured, dst);
-		}
+        m_boards.removePiece(square, piece);
 
-		if constexpr (UpdateKey)
-			state.keys.movePiece(piece, src, dst);
+        if constexpr (kUpdateKey) {
+            m_keys.flipPiece(piece, square);
+        }
+    }
 
-		return captured;
-	}
+    template <bool kUpdateKey>
+    void Position::movePieceNoCap(Piece piece, Square src, Square dst) {
+        assert(piece != Piece::kNone);
 
-	template <bool UpdateKey, bool UpdateNnue>
-	auto Position::promotePawn(Piece pawn, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece
-	{
-		assert(pawn != Piece::None);
-		assert(pieceType(pawn) == PieceType::Pawn);
+        assert(src != Square::kNone);
+        assert(dst != Square::kNone);
 
-		assert(src != Square::None);
-		assert(dst != Square::None);
-		assert(src != dst);
+        if (src == dst) {
+            return;
+        }
 
-		assert(squareRank(dst) == relativeRank(pieceColor(pawn), 7));
-		assert(squareRank(src) == relativeRank(pieceColor(pawn), 6));
+        m_boards.movePiece(src, dst, piece);
 
-		auto &state = currState();
+        if (pieceType(piece) == PieceType::kKing) {
+            const auto color = pieceColor(piece);
+            m_kings.color(color) = dst;
+        }
 
-		const auto captured = state.boards.pieceAt(dst);
+        if constexpr (kUpdateKey) {
+            m_keys.movePiece(piece, src, dst);
+        }
+    }
 
-		if (captured != Piece::None)
-		{
-			assert(pieceType(captured) != PieceType::King);
+    template <bool kUpdateKey, bool kUpdateNnue>
+    Piece Position::movePiece(Piece piece, Square src, Square dst, eval::NnueUpdates& nnueUpdates) {
+        assert(piece != Piece::kNone);
 
-			state.boards.removePiece(dst, captured);
+        assert(src != Square::kNone);
+        assert(dst != Square::kNone);
+        assert(src != dst);
 
-			if constexpr (UpdateNnue)
-				nnueUpdates.pushSub(captured, dst);
+        const auto captured = m_boards.pieceOn(dst);
 
-			if constexpr (UpdateKey)
-				state.keys.flipPiece(captured, dst);
-		}
+        if (captured != Piece::kNone) {
+            assert(pieceType(captured) != PieceType::kKing);
 
-		state.boards.moveAndChangePiece(src, dst, pawn, PieceType::Ferz);
+            m_boards.removePiece(dst, captured);
 
-		if constexpr(UpdateNnue || UpdateKey)
-		{
-			const auto coloredFerz = copyPieceColor(pawn, PieceType::Ferz);
+            // NNUE update done below
 
-			if constexpr (UpdateNnue)
-			{
-				nnueUpdates.pushSub(pawn, src);
-				nnueUpdates.pushAdd(coloredFerz, dst);
-			}
+            if constexpr (kUpdateKey) {
+                m_keys.flipPiece(captured, dst);
+            }
+        }
 
-			if constexpr (UpdateKey)
-			{
-				state.keys.flipPiece(pawn, src);
-				state.keys.flipPiece(coloredFerz, dst);
-			}
-		}
+        m_boards.movePiece(src, dst, piece);
 
-		return captured;
-	}
+        if (pieceType(piece) == PieceType::kKing) {
+            const auto color = pieceColor(piece);
 
-	auto Position::regen() -> void
-	{
-		auto &state = currState();
+            if constexpr (kUpdateNnue) {
+                if (eval::InputFeatureSet::refreshRequired(color, m_kings.color(color), dst)) {
+                    nnueUpdates.setRefresh(color);
+                }
+            }
 
-		state.boards.regenFromBbs();
+            m_kings.color(color) = dst;
+        }
 
-		state.keys.clear();
+        if constexpr (kUpdateNnue) {
+            nnueUpdates.pushSubAdd(piece, src, dst);
 
-		for (u32 rank = 0; rank < 8; ++rank)
-		{
-			for (u32 file = 0; file < 8; ++file)
-			{
-				const auto square = toSquare(rank, file);
-				if (const auto piece = state.boards.pieceAt(square); piece != Piece::None)
-				{
-					if (pieceType(piece) == PieceType::King)
-						state.kings.color(pieceColor(piece)) = square;
+            if (captured != Piece::kNone) {
+                nnueUpdates.pushSub(captured, dst);
+            }
+        }
 
-					state.keys.flipPiece(piece, toSquare(rank, file));
-				}
-			}
-		}
+        if constexpr (kUpdateKey) {
+            m_keys.movePiece(piece, src, dst);
+        }
 
-		if (toMove() == Color::Black)
-			state.keys.flipStm();
+        return captured;
+    }
 
-		state.checkers = calcCheckers();
-		state.pinned = calcPinned();
-		state.threats = calcThreats();
-	}
+    template <bool kUpdateKey, bool kUpdateNnue>
+    Piece Position::promotePawn(Piece pawn, Square src, Square dst, eval::NnueUpdates& nnueUpdates) {
+        assert(pawn != Piece::kNone);
+        assert(pieceType(pawn) == PieceType::kPawn);
 
-	auto Position::moveFromUci(const std::string &move) const -> Move
-	{
-		if (move.length() < 4 || move.length() > 5)
-			return NullMove;
+        assert(src != Square::kNone);
+        assert(dst != Square::kNone);
+        assert(src != dst);
 
-		if (move.length() == 5 && move[4] != 'q')
-			return NullMove;
+        assert(squareRank(dst) == relativeRank(pieceColor(pawn), 7));
+        assert(squareRank(src) == relativeRank(pieceColor(pawn), 6));
 
-		const auto src = squareFromString(move.substr(0, 2));
-		const auto dst = squareFromString(move.substr(2, 2));
+        const auto captured = m_boards.pieceOn(dst);
 
-		const auto &state = currState();
+        if (captured != Piece::kNone) {
+            assert(pieceType(captured) != PieceType::kKing);
 
-		const auto srcPiece = pieceType(state.boards.pieceAt(src));
-		const auto promoRank = relativeRank(toMove(), 7);
+            m_boards.removePiece(dst, captured);
 
-		return (srcPiece == PieceType::Pawn && squareRank(dst) == promoRank)
-			? Move::promotion(src, dst)
-			: Move:: standard(src, dst);
-	}
+            if constexpr (kUpdateNnue) {
+                nnueUpdates.pushSub(captured, dst);
+            }
 
-	auto Position::starting() -> Position
-	{
-		Position position{};
-		position.resetToStarting();
-		return position;
-	}
+            if constexpr (kUpdateKey) {
+                m_keys.flipPiece(captured, dst);
+            }
+        }
 
-	auto Position::fromFen(const std::string &fen) -> std::optional<Position>
-	{
-		Position position{};
+        m_boards.moveAndChangePiece(src, dst, pawn, PieceType::kFerz);
 
-		if (position.resetFromFen(fen))
-			return position;
+        if constexpr (kUpdateNnue || kUpdateKey) {
+            const auto coloredFerz = copyPieceColor(pawn, PieceType::kFerz);
 
-		return {};
-	}
+            if constexpr (kUpdateNnue) {
+                nnueUpdates.pushSub(pawn, src);
+                nnueUpdates.pushAdd(coloredFerz, dst);
+            }
 
-	auto Position::fromFrcIndex(u32 n) -> std::optional<Position>
-	{
-		assert(g_opts.chess960);
+            if constexpr (kUpdateKey) {
+                m_keys.flipPiece(pawn, src);
+                m_keys.flipPiece(coloredFerz, dst);
+            }
+        }
 
-		if (n >= 960)
-		{
-			std::cerr << "invalid frc position index " << n << std::endl;
-			return {};
-		}
+        return captured;
+    }
 
-		Position position{};
-		position.resetFromFrcIndex(n);
+    void Position::regen() {
+        m_boards.regenFromBbs();
 
-		return position;
-	}
+        m_keys.clear();
 
-	auto Position::fromDfrcIndex(u32 n) -> std::optional<Position>
-	{
-		assert(g_opts.chess960);
+        for (u32 rank = 0; rank < 8; ++rank) {
+            for (u32 file = 0; file < 8; ++file) {
+                const auto square = toSquare(rank, file);
+                if (const auto piece = m_boards.pieceOn(square); piece != Piece::kNone) {
+                    if (pieceType(piece) == PieceType::kKing) {
+                        m_kings.color(pieceColor(piece)) = square;
+                    }
 
-		if (n >= 960 * 960)
-		{
-			std::cerr << "invalid dfrc position index " << n << std::endl;
-			return {};
-		}
+                    m_keys.flipPiece(piece, toSquare(rank, file));
+                }
+            }
+        }
 
-		Position position{};
-		position.resetFromDfrcIndex(n);
+        if (stm() == Color::kBlack) {
+            m_keys.flipStm();
+        }
 
-		return position;
-	}
+        m_checkers = calcCheckers();
+        m_pinned = calcPinned();
+        m_threats = calcThreats();
+    }
 
-	auto squareFromString(const std::string &str) -> Square
-	{
-		if (str.length() != 2)
-			return Square::None;
+    Move Position::moveFromUci(std::string_view move) const {
+        if (move.length() < 4 || move.length() > 5) {
+            return kNullMove;
+        }
 
-		const auto file = str[0];
-		const auto rank = str[1];
+        if (move.length() == 5 && move[4] != 'q') {
+            return kNullMove;
+        }
 
-		if (file < 'a' || file > 'h'
-			|| rank < '1' || rank > '8')
-			return Square::None;
+        const auto src = squareFromString(move.substr(0, 2));
+        const auto dst = squareFromString(move.substr(2, 2));
 
-		return toSquare(static_cast<u32>(rank - '1'), static_cast<u32>(file - 'a'));
-	}
+        const auto moving = pieceType(boards().pieceOn(src));
+        const auto promoRank = relativeRank(stm(), 7);
+
+        return (moving == PieceType::kPawn && squareRank(dst) == promoRank) ? Move::promotion(src, dst)
+                                                                            : Move::standard(src, dst);
+    }
+
+    Position Position::starting() {
+        Position pos{};
+
+        auto& bbs = pos.m_boards.bbs();
+
+        bbs.forPiece(PieceType::kPawn) = U64(0x00FF00000000FF00);
+        bbs.forPiece(PieceType::kAlfil) = U64(0x2400000000000024);
+        bbs.forPiece(PieceType::kFerz) = U64(0x1000000000000010);
+        bbs.forPiece(PieceType::kKnight) = U64(0x4200000000000042);
+        bbs.forPiece(PieceType::kRook) = U64(0x8100000000000081);
+        bbs.forPiece(PieceType::kKing) = U64(0x0800000000000008);
+
+        bbs.forColor(Color::kBlack) = U64(0xFFFF000000000000);
+        bbs.forColor(Color::kWhite) = U64(0x000000000000FFFF);
+
+        pos.m_stm = Color::kWhite;
+        pos.m_fullmove = 1;
+
+        pos.regen();
+
+        return pos;
+    }
+
+    std::optional<Position> Position::fromFenParts(std::span<const std::string_view> fen) {
+        if (fen.size() < 4 || fen.size() > 6) {
+            eprintln("wrong number of FEN parts");
+            return {};
+        }
+
+        Position pos{};
+        const auto& bbs = pos.bbs();
+
+        u32 rankIdx = 0;
+
+        std::vector<std::string_view> ranks{};
+        split::split(ranks, fen[0], '/');
+
+        for (const auto rank : ranks) {
+            if (rankIdx >= 8) {
+                eprintln("too many ranks");
+                return {};
+            }
+
+            u32 fileIdx = 0;
+
+            for (const auto c : rank) {
+                if (fileIdx >= 8) {
+                    eprintln("too many files in rank {}", rankIdx);
+                    return {};
+                }
+
+                if (const auto emptySquares = util::tryParseDigit(c)) {
+                    fileIdx += *emptySquares;
+                } else if (const auto piece = pieceFromChar(c); piece != Piece::kNone) {
+                    pos.m_boards.setPiece(toSquare(7 - rankIdx, fileIdx), piece);
+                    ++fileIdx;
+                } else {
+                    eprintln("invalid piece character {}", c);
+                    return {};
+                }
+            }
+
+            // last character was a digit
+            if (fileIdx > 8) {
+                eprintln("too many files in rank {}", rankIdx);
+                return {};
+            }
+
+            if (fileIdx < 8) {
+                eprintln("not enough files in rank {}", rankIdx);
+                return {};
+            }
+
+            ++rankIdx;
+        }
+
+        if (const auto blackKingCount = bbs.forPiece(Piece::kBlackKing).popcount(); blackKingCount != 1) {
+            eprintln("black must have exactly 1 king, but has {}", blackKingCount);
+            return {};
+        }
+
+        if (const auto whiteKingCount = bbs.forPiece(Piece::kWhiteKing).popcount(); whiteKingCount != 1) {
+            eprintln("white must have exactly 1 king, but has {}", whiteKingCount);
+            return {};
+        }
+
+        if (bbs.occupancy().popcount() > 32) {
+            eprintln("too many pieces");
+            return {};
+        }
+
+        const auto color = fen[1];
+
+        if (color.length() != 1) {
+            eprintln("invalid side to move");
+            return {};
+        }
+
+        switch (color[0]) {
+            case 'b':
+                pos.m_stm = Color::kBlack;
+                break;
+            case 'w':
+                pos.m_stm = Color::kWhite;
+                break;
+            default:
+                eprintln("invalid side to move");
+                return {};
+        }
+
+        if (const auto stm = pos.stm();
+            pos.isAttacked<false>(stm, bbs.forPiece(PieceType::kKing, oppColor(stm)).lowestSquare(), stm))
+        {
+            eprintln("opponent must not be in check");
+            return {};
+        }
+
+        if (fen[2] != "-") {
+            eprintln("invalid 3rd field");
+            return {};
+        }
+
+        if (fen[3] != "-") {
+            eprintln("invalid 4th field");
+            return {};
+        }
+
+        if (fen.size() >= 5) {
+            const auto halfmove = fen[4];
+            if (!util::tryParse(pos.m_halfmove, halfmove)) {
+                eprintln("invalid halfmove clock");
+                return {};
+            }
+        }
+
+        if (fen.size() >= 6) {
+            const auto fullmove = fen[5];
+            if (!util::tryParse(pos.m_fullmove, fullmove)) {
+                eprintln("invalid fullmove number");
+                return {};
+            }
+        }
+
+        pos.regen();
+
+        return pos;
+    }
+
+    std::optional<Position> Position::fromFen(std::string_view fen) {
+        std::vector<std::string_view> parts{};
+        parts.reserve(6);
+
+        split::split(parts, fen, ' ');
+
+        return fromFenParts(parts);
+    }
+
+    Square squareFromString(std::string_view str) {
+        if (str.length() != 2) {
+            return Square::kNone;
+        }
+
+        const auto file = str[0];
+        const auto rank = str[1];
+
+        if (file < 'a' || file > 'h' || rank < '1' || rank > '8') {
+            return Square::kNone;
+        }
+
+        return toSquare(static_cast<u32>(rank - '1'), static_cast<u32>(file - 'a'));
+    }
+} // namespace oranj
+
+fmt::format_context::iterator fmt::formatter<oranj::Position>::format(const oranj::Position& value, format_context& ctx)
+    const {
+    using namespace oranj;
+
+    const auto& boards = value.boards();
+
+    for (i32 rank = 7; rank >= 0; --rank) {
+        format_to(ctx.out(), " +---+---+---+---+---+---+---+---+\n");
+
+        for (i32 file = 0; file < 8; ++file) {
+            const auto piece = boards.pieceAt(rank, file);
+            format_to(ctx.out(), " | {}", piece);
+        }
+
+        format_to(ctx.out(), " | {}\n", rank + 1);
+    }
+
+    format_to(ctx.out(), " +---+---+---+---+---+---+---+---+\n");
+    format_to(ctx.out(), "   a   b   c   d   e   f   g   h\n");
+
+    format_to(ctx.out(), "\n");
+
+    format_to(ctx.out(), "{} to move", value.stm() == Color::kBlack ? "Black" : "White");
+
+    return ctx.out();
 }

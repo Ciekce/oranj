@@ -23,18 +23,16 @@
 #include "move.h"
 #include "position/position.h"
 
-namespace oranj
-{
-	struct ScoredMove
-	{
-		Move move;
-		i32 score;
-	};
+namespace oranj {
+    struct ScoredMove {
+        Move move;
+        i32 score;
+    };
 
-	using ScoredMoveList = StaticVector<ScoredMove, DefaultMoveListCapacity>;
+    using ScoredMoveList = StaticVector<ScoredMove, kDefaultMoveListCapacity>;
 
-	auto generateNoisy(ScoredMoveList &noisy, const Position &pos) -> void;
-	auto generateQuiet(ScoredMoveList &quiet, const Position &pos) -> void;
+    void generateNoisy(ScoredMoveList& noisy, const Position& pos);
+    void generateQuiet(ScoredMoveList& quiet, const Position& pos);
 
-	auto generateAll(ScoredMoveList &dst, const Position &pos) -> void;
-}
+    void generateAll(ScoredMoveList& dst, const Position& pos);
+} // namespace oranj

@@ -20,593 +20,506 @@
 
 #include "../types.h"
 
-#include <string>
-#include <vector>
-#include <stack>
+#include <array>
 #include <optional>
+#include <stack>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
-#include "boards.h"
-#include "../move.h"
 #include "../attacks/attacks.h"
-#include "../ttable.h"
 #include "../eval/nnue.h"
-#include "../rays.h"
 #include "../keys.h"
+#include "../move.h"
+#include "../rays.h"
+#include "../ttable.h"
+#include "boards.h"
+
+namespace oranj {
+    struct Keys {
+        u64 all;
+        u64 pawns;
+        u64 blackNonPawns;
+        u64 whiteNonPawns;
+        u64 majors;
+
+        inline void clear() {
+            all = 0;
+            pawns = 0;
+            blackNonPawns = 0;
+            whiteNonPawns = 0;
+            majors = 0;
+        }
+
+        inline void flipStm() {
+            all ^= keys::color();
+        }
+
+        inline void flipPiece(Piece piece, Square square) {
+            const auto key = keys::pieceSquare(piece, square);
+
+            all ^= key;
+
+            if (pieceType(piece) == PieceType::kPawn) {
+                pawns ^= key;
+            } else if (pieceColor(piece) == Color::kBlack) {
+                blackNonPawns ^= key;
+            } else {
+                whiteNonPawns ^= key;
+            }
+
+            if (isMajor(piece)) {
+                majors ^= key;
+            }
+        }
+
+        inline void movePiece(Piece piece, Square src, Square dst) {
+            const auto key = keys::pieceSquare(piece, src) ^ keys::pieceSquare(piece, dst);
+
+            all ^= key;
+
+            if (pieceType(piece) == PieceType::kPawn) {
+                pawns ^= key;
+            } else if (pieceColor(piece) == Color::kBlack) {
+                blackNonPawns ^= key;
+            } else {
+                whiteNonPawns ^= key;
+            }
+
+            if (isMajor(piece)) {
+                majors ^= key;
+            }
+        }
 
-namespace oranj
-{
-	struct Keys
-	{
-		u64 all;
-		u64 pawns;
-		u64 blackNonPawns;
-		u64 whiteNonPawns;
-		u64 majors;
-
-		inline auto clear()
-		{
-			all = 0;
-			pawns = 0;
-			blackNonPawns = 0;
-			whiteNonPawns = 0;
-			majors = 0;
-		}
-
-		inline auto flipStm()
-		{
-			const auto key = keys::color();
-
-			all ^= key;
-			pawns ^= key;
-			blackNonPawns ^= key;
-			whiteNonPawns ^= key;
-			majors ^= key;
-		}
-
-		inline auto flipPiece(Piece piece, Square square)
-		{
-			const auto key = keys::pieceSquare(piece, square);
-
-			all ^= key;
-
-			if (pieceType(piece) == PieceType::Pawn)
-				pawns ^= key;
-			else if (pieceColor(piece) == Color::Black)
-				blackNonPawns ^= key;
-			else whiteNonPawns ^= key;
-
-			if (isMajor(piece))
-				majors ^= key;
-		}
-
-		inline auto movePiece(Piece piece, Square src, Square dst)
-		{
-			const auto key = keys::pieceSquare(piece, src) ^ keys::pieceSquare(piece, dst);
-
-			all ^= key;
-
-			if (pieceType(piece) == PieceType::Pawn)
-				pawns ^= key;
-			else if (pieceColor(piece) == Color::Black)
-				blackNonPawns ^= key;
-			else whiteNonPawns ^= key;
-
-			if (isMajor(piece))
-				majors ^= key;
-		}
-
-		[[nodiscard]] inline auto operator==(const Keys &other) const -> bool = default;
-	};
-
-	struct BoardState
-	{
-		PositionBoards boards{};
-
-		Keys keys{};
-
-		Bitboard checkers{};
-		Bitboard pinned{};
-		Bitboard threats{};
-
-		u16 halfmove{};
-
-		KingPair kings{};
-	};
-
-	static_assert(sizeof(BoardState) == 200);
-
-	[[nodiscard]] inline auto squareToString(Square square)
-	{
-		constexpr auto Files = std::array{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'};
-		constexpr auto Ranks = std::array{'1', '2', '3', '4', '5', '6', '7', '8'};
-
-		const auto s = static_cast<u32>(square);
-		return std::string{Files[s % 8], Ranks[s / 8]};
-	}
-
-	class Position;
-
-	template <bool UpdateNnue>
-	class HistoryGuard
-	{
-	public:
-		explicit HistoryGuard(Position &pos, eval::NnueState *nnueState)
-			: m_pos{pos},
-			  m_nnueState{nnueState} {}
-		inline ~HistoryGuard();
+        [[nodiscard]] inline bool operator==(const Keys& other) const = default;
+    };
 
-	private:
-		Position &m_pos;
-		eval::NnueState *m_nnueState;
-	};
+    enum class NnueUpdateAction {
+        kNone = 0,
+        kQueue,
+        kApply,
+    };
 
-	class Position
-	{
-	public:
-		Position();
-		~Position() = default;
+    class Position {
+    public:
+        // Moves are assumed to be legal
+        template <NnueUpdateAction kNnueAction = NnueUpdateAction::kNone>
+        [[nodiscard]] Position applyMove(Move move, eval::NnueState* nnueState = nullptr) const;
 
-		Position(const Position &) = default;
-		Position(Position &&) = default;
+        [[nodiscard]] inline Position applyNullMove() const {
+            return applyMove(kNullMove);
+        }
 
-		auto resetToStarting() -> void;
-		auto resetFromFen(const std::string &fen) -> bool;
-		auto resetFromFrcIndex(u32 n) -> bool;
-		auto resetFromDfrcIndex(u32 n) -> bool;
+        [[nodiscard]] bool isPseudolegal(Move move) const;
+        [[nodiscard]] bool isLegal(Move move) const;
 
-		auto copyStateFrom(const Position &other) -> void;
+        [[nodiscard]] inline const PositionBoards& boards() const {
+            return m_boards;
+        }
 
-		// Moves are assumed to be legal
-		template <bool UpdateNnue = true, bool StateHistory = true>
-		auto applyMoveUnchecked(Move move, eval::NnueState *nnueState) -> void;
+        [[nodiscard]] inline const BitboardSet& bbs() const {
+            return m_boards.bbs();
+        }
 
-		// Moves are assumed to be legal
-		template <bool UpdateNnue = true>
-		[[nodiscard]] inline auto applyMove(Move move, eval::NnueState *nnueState)
-		{
-			if constexpr (UpdateNnue)
-				assert(nnueState != nullptr);
+        [[nodiscard]] inline Color stm() const {
+            return m_stm;
+        }
 
-			applyMoveUnchecked<UpdateNnue>(move, nnueState);
+        [[nodiscard]] inline Color nstm() const {
+            return oppColor(m_stm);
+        }
 
-			return HistoryGuard<UpdateNnue>{*this, UpdateNnue ? nnueState : nullptr};
-		}
+        [[nodiscard]] inline u16 halfmove() const {
+            return m_halfmove;
+        }
 
-		[[nodiscard]] inline auto applyNullMove()
-		{
-			return applyMove<false>(NullMove, nullptr);
-		}
+        [[nodiscard]] inline u32 fullmove() const {
+            return m_fullmove;
+        }
 
-		template <bool UpdateNnue = true>
-		auto popMove(eval::NnueState *nnueState) -> void;
+        [[nodiscard]] inline u64 key() const {
+            return m_keys.all;
+        }
 
-		auto clearStateHistory() -> void;
+        [[nodiscard]] inline u64 pawnKey() const {
+            return m_keys.pawns;
+        }
 
-		[[nodiscard]] auto isPseudolegal(Move move) const -> bool;
-		[[nodiscard]] auto isLegal(Move move) const -> bool;
+        [[nodiscard]] inline u64 blackNonPawnKey() const {
+            return m_keys.blackNonPawns;
+        }
 
-	private:
-		[[nodiscard]] inline auto currState() -> auto & { return m_states.back(); }
-		[[nodiscard]] inline auto currState() const -> const auto & { return m_states.back(); }
+        [[nodiscard]] inline u64 whiteNonPawnKey() const {
+            return m_keys.whiteNonPawns;
+        }
 
-	public:
-		[[nodiscard]] inline auto boards() const -> const auto & { return currState().boards; }
-		[[nodiscard]] inline auto bbs() const -> const auto & { return currState().boards.bbs(); }
+        [[nodiscard]] inline u64 majorKey() const {
+            return m_keys.majors;
+        }
 
-		[[nodiscard]] inline auto toMove() const
-		{
-			return m_blackToMove ? Color::Black : Color::White;
-		}
+        [[nodiscard]] inline u64 roughKeyAfter(Move move) const {
+            assert(move);
 
-		[[nodiscard]] inline auto opponent() const
-		{
-			return m_blackToMove ? Color::White : Color::Black;
-		}
+            const auto moving = m_boards.pieceOn(move.fromSq());
+            assert(moving != Piece::kNone);
 
-		[[nodiscard]] inline auto halfmove() const { return currState().halfmove; }
-		[[nodiscard]] inline auto fullmove() const { return m_fullmove; }
+            const auto captured = m_boards.pieceOn(move.toSq());
 
-		[[nodiscard]] inline auto key() const { return currState().keys.all; }
-		[[nodiscard]] inline auto pawnKey() const { return currState().keys.pawns; }
-		[[nodiscard]] inline auto blackNonPawnKey() const { return currState().keys.blackNonPawns; }
-		[[nodiscard]] inline auto whiteNonPawnKey() const { return currState().keys.whiteNonPawns; }
-		[[nodiscard]] inline auto majorKey() const { return currState().keys.majors; }
+            auto key = m_keys.all;
 
-		[[nodiscard]] inline auto roughKeyAfter(Move move) const
-		{
-			assert(move);
+            key ^= keys::pieceSquare(moving, move.fromSq());
+            key ^= keys::pieceSquare(moving, move.toSq());
 
-			const auto &state = currState();
+            if (captured != Piece::kNone) {
+                key ^= keys::pieceSquare(captured, move.toSq());
+            }
 
-			const auto moving = state.boards.pieceAt(move.src());
-			assert(moving != Piece::None);
+            key ^= keys::color();
 
-			const auto captured = state.boards.pieceAt(move.dst());
+            return key;
+        }
 
-			auto key = state.keys.all;
+        [[nodiscard]] inline Bitboard allAttackersTo(Square square, Bitboard occupancy) const {
+            assert(square != Square::kNone);
 
-			key ^= keys::pieceSquare(moving, move.src());
-			key ^= keys::pieceSquare(moving, move.dst());
+            const auto& bbs = this->bbs();
 
-			if (captured != Piece::None)
-				key ^= keys::pieceSquare(captured, move.dst());
+            Bitboard attackers{};
 
-			key ^= keys::color();
+            attackers |= bbs.blackPawns() & attacks::getPawnAttacks(square, Color::kWhite);
+            attackers |= bbs.whitePawns() & attacks::getPawnAttacks(square, Color::kBlack);
 
-			return key;
-		}
+            const auto alfils = bbs.alfils();
+            attackers |= alfils & attacks::getAlfilAttacks(square);
 
-		[[nodiscard]] inline auto allAttackersTo(Square square, Bitboard occupancy) const
-		{
-			assert(square != Square::None);
+            const auto ferzes = bbs.ferzes();
+            attackers |= ferzes & attacks::getFerzAttacks(square);
 
-			const auto &bbs = this->bbs();
+            const auto knights = bbs.knights();
+            attackers |= knights & attacks::getKnightAttacks(square);
 
-			Bitboard attackers{};
+            const auto rooks = bbs.rooks();
+            attackers |= rooks & attacks::getRookAttacks(square, occupancy);
 
-			attackers |= bbs.blackPawns() & attacks::getPawnAttacks(square, Color::White);
-			attackers |= bbs.whitePawns() & attacks::getPawnAttacks(square, Color::Black);
+            const auto kings = bbs.kings();
+            attackers |= kings & attacks::getKingAttacks(square);
 
-			const auto alfils = bbs.alfils();
-			attackers |= alfils & attacks::getAlfilAttacks(square);
+            return attackers;
+        }
 
-			const auto ferzes = bbs.ferzes();
-			attackers |= ferzes & attacks::getFerzAttacks(square);
+        [[nodiscard]] inline Bitboard attackersTo(Square square, Color attacker) const {
+            assert(square != Square::kNone);
 
-			const auto knights = bbs.knights();
-			attackers |= knights & attacks::getKnightAttacks(square);
+            const auto& bbs = this->bbs();
 
-			const auto rooks = bbs.rooks();
-			attackers |= rooks & attacks::getRookAttacks(square, occupancy);
+            Bitboard attackers{};
 
-			const auto kings = bbs.kings();
-			attackers |= kings & attacks::getKingAttacks(square);
+            const auto occ = bbs.occupancy();
 
-			return attackers;
-		}
+            const auto pawns = bbs.pawns(attacker);
+            attackers |= pawns & attacks::getPawnAttacks(square, oppColor(attacker));
 
-		[[nodiscard]] inline auto attackersTo(Square square, Color attacker) const
-		{
-			assert(square != Square::None);
+            const auto alfils = bbs.alfils(attacker);
+            attackers |= alfils & attacks::getAlfilAttacks(square);
 
-			const auto &bbs = this->bbs();
+            const auto ferzes = bbs.ferzes(attacker);
+            attackers |= ferzes & attacks::getFerzAttacks(square);
 
-			Bitboard attackers{};
+            const auto knights = bbs.knights(attacker);
+            attackers |= knights & attacks::getKnightAttacks(square);
 
-			const auto occ = bbs.occupancy();
+            const auto rooks = bbs.rooks(attacker);
+            attackers |= rooks & attacks::getRookAttacks(square, occ);
 
-			const auto pawns = bbs.pawns(attacker);
-			attackers |= pawns & attacks::getPawnAttacks(square, oppColor(attacker));
+            const auto kings = bbs.kings(attacker);
+            attackers |= kings & attacks::getKingAttacks(square);
 
-			const auto alfils = bbs.alfils(attacker);
-			attackers |= alfils & attacks::getAlfilAttacks(square);
+            return attackers;
+        }
 
-			const auto ferzes = bbs.ferzes(attacker);
-			attackers |= ferzes & attacks::getFerzAttacks(square);
+        template <bool kThreatShortcut = true>
+        [[nodiscard]] inline bool isAttacked(Color toMove, Square square, Color attacker) const {
+            assert(toMove != Color::kNone);
+            assert(square != Square::kNone);
+            assert(attacker != Color::kNone);
 
-			const auto knights = bbs.knights(attacker);
-			attackers |= knights & attacks::getKnightAttacks(square);
+            if constexpr (kThreatShortcut) {
+                if (attacker != toMove) {
+                    return m_threats[square];
+                }
+            }
 
-			const auto rooks = bbs.rooks(attacker);
-			attackers |= rooks & attacks::getRookAttacks(square, occ);
+            const auto& bbs = m_boards.bbs();
 
-			const auto kings = bbs.kings(attacker);
-			attackers |= kings & attacks::getKingAttacks(square);
+            const auto occ = bbs.occupancy();
 
-			return attackers;
-		}
+            if (const auto knights = bbs.knights(attacker); !(knights & attacks::getKnightAttacks(square)).empty()) {
+                return true;
+            }
 
-		template <bool ThreatShortcut = true>
-		[[nodiscard]] static inline auto isAttacked(const BoardState &state,
-			Color toMove, Square square, Color attacker)
-		{
-			assert(toMove != Color::None);
-			assert(square != Square::None);
-			assert(attacker != Color::None);
+            if (const auto alfils = bbs.alfils(attacker); !(alfils & attacks::getAlfilAttacks(square)).empty()) {
+                return true;
+            }
 
-			if constexpr (ThreatShortcut)
-			{
-				if (attacker != toMove)
-					return state.threats[square];
-			}
+            if (const auto ferzes = bbs.ferzes(attacker); !(ferzes & attacks::getFerzAttacks(square)).empty()) {
+                return true;
+            }
 
-			const auto &bbs = state.boards.bbs();
+            if (const auto pawns = bbs.pawns(attacker);
+                !(pawns & attacks::getPawnAttacks(square, oppColor(attacker))).empty())
+            {
+                return true;
+            }
 
-			const auto occ = bbs.occupancy();
+            if (const auto kings = bbs.kings(attacker); !(kings & attacks::getKingAttacks(square)).empty()) {
+                return true;
+            }
 
-			if (const auto knights = bbs.knights(attacker);
-				!(knights & attacks::getKnightAttacks(square)).empty())
-				return true;
+            if (const auto rooks = bbs.rooks(attacker); !(rooks & attacks::getRookAttacks(square, occ)).empty()) {
+                return true;
+            }
 
-			if (const auto alfils = bbs.alfils(attacker);
-				!(alfils & attacks::getAlfilAttacks(square)).empty())
-				return true;
+            return false;
+        }
 
-			if (const auto ferzes = bbs.ferzes(attacker);
-				!(ferzes & attacks::getFerzAttacks(square)).empty())
-				return true;
+        template <bool kThreatShortcut = true>
+        [[nodiscard]] inline bool isAttacked(Square square, Color attacker) const {
+            assert(square != Square::kNone);
+            assert(attacker != Color::kNone);
 
-			if (const auto pawns = bbs.pawns(attacker);
-				!(pawns & attacks::getPawnAttacks(square, oppColor(attacker))).empty())
-				return true;
+            return isAttacked<kThreatShortcut>(stm(), square, attacker);
+        }
 
-			if (const auto kings = bbs.kings(attacker);
-				!(kings & attacks::getKingAttacks(square)).empty())
-				return true;
+        [[nodiscard]] inline bool anyAttacked(Bitboard squares, Color attacker) const {
+            assert(attacker != Color::kNone);
 
-			if (const auto rooks = bbs.rooks(attacker);
-				!(rooks & attacks::getRookAttacks(square, occ)).empty())
-				return true;
+            if (attacker == nstm()) {
+                return !(squares & m_threats).empty();
+            }
 
-			return false;
-		}
+            while (squares) {
+                const auto square = squares.popLowestSquare();
+                if (isAttacked(square, attacker)) {
+                    return true;
+                }
+            }
 
-		template <bool ThreatShortcut = true>
-		[[nodiscard]] inline auto isAttacked(Square square, Color attacker) const
-		{
-			assert(square != Square::None);
-			assert(attacker != Color::None);
+            return false;
+        }
 
-			return isAttacked<ThreatShortcut>(currState(), toMove(), square, attacker);
-		}
+        [[nodiscard]] inline KingPair kings() const {
+            return m_kings;
+        }
 
-		[[nodiscard]] inline auto anyAttacked(Bitboard squares, Color attacker) const
-		{
-			assert(attacker != Color::None);
+        [[nodiscard]] inline Square blackKing() const {
+            return m_kings.black();
+        }
 
-			if (attacker == opponent())
-				return !(squares & currState().threats).empty();
+        [[nodiscard]] inline Square whiteKing() const {
+            return m_kings.white();
+        }
 
-			while (squares)
-			{
-				const auto square = squares.popLowestSquare();
-				if (isAttacked(square, attacker))
-					return true;
-			}
+        template <Color C>
+        [[nodiscard]] inline Square king() const {
+            return m_kings.color(C);
+        }
 
-			return false;
-		}
+        [[nodiscard]] inline Square king(Color c) const {
+            assert(c != Color::kNone);
+            return m_kings.color(c);
+        }
 
-		[[nodiscard]] inline auto kings() const { return currState().kings; }
+        template <Color C>
+        [[nodiscard]] inline Square oppKing() const {
+            return m_kings.color(oppColor(C));
+        }
 
-		[[nodiscard]] inline auto blackKing() const { return currState().kings.black(); }
-		[[nodiscard]] inline auto whiteKing() const { return currState().kings.white(); }
+        [[nodiscard]] inline Square oppKing(Color c) const {
+            assert(c != Color::kNone);
+            return m_kings.color(oppColor(c));
+        }
 
-		template <Color C>
-		[[nodiscard]] inline auto king() const
-		{
-			return currState().kings.color(C);
-		}
+        [[nodiscard]] inline bool isCheck() const {
+            return !m_checkers.empty();
+        }
 
-		[[nodiscard]] inline auto king(Color c) const
-		{
-			assert(c != Color::None);
-			return currState().kings.color(c);
-		}
+        [[nodiscard]] inline Bitboard checkers() const {
+            return m_checkers;
+        }
+        [[nodiscard]] inline Bitboard pinned(Color c) const {
+            return m_pinned[static_cast<i32>(c)];
+        }
 
-		template <Color C>
-		[[nodiscard]] inline auto oppKing() const
-		{
-			return currState().kings.color(oppColor(C));
-		}
+        [[nodiscard]] inline std::array<Bitboard, 2> pinned() const {
+            return m_pinned;
+        }
 
-		[[nodiscard]] inline auto oppKing(Color c) const
-		{
-			assert(c != Color::None);
-			return currState().kings.color(oppColor(c));
-		}
+        [[nodiscard]] inline Bitboard threats() const {
+            return m_threats;
+        }
 
-		[[nodiscard]] inline auto isCheck() const
-		{
-			return !currState().checkers.empty();
-		}
+        [[nodiscard]] bool hasCycle(i32 ply, std::span<const u64> keys) const;
+        [[nodiscard]] bool isDrawn(i32 ply, std::span<const u64> keys) const;
 
-		[[nodiscard]] inline auto checkers() const { return currState().checkers; }
-		[[nodiscard]] inline auto pinned() const { return currState().pinned; }
-		[[nodiscard]] inline auto threats() const { return currState().threats; }
+        [[nodiscard]] inline bool isBareKingWin() const {
+            const auto& bbs = this->bbs();
 
-		[[nodiscard]] auto hasCycle(i32 ply) const -> bool;
-		[[nodiscard]] auto isDrawn(bool threefold) const -> bool;
+            const auto us = stm();
+            const auto them = oppColor(us);
 
-		[[nodiscard]] inline auto isBareKingWin() const
-		{
-			const auto &bbs = this->bbs();
+            return bbs.occupancy(us) != bbs.kings(us) && bbs.occupancy(them) == bbs.kings(them);
+        }
 
-			const auto us = toMove();
-			const auto them = oppColor(toMove());
+        [[nodiscard]] inline Piece captureTarget(Move move) const {
+            assert(move != kNullMove);
+            return boards().pieceOn(move.toSq());
+        }
 
-			return bbs.occupancy(us) != bbs.kings(us)
-				&& bbs.occupancy(them) == bbs.kings(them);
-		}
+        [[nodiscard]] inline bool isNoisy(Move move) const {
+            assert(move != kNullMove);
+            return move.isPromo() || boards().pieceOn(move.toSq()) != Piece::kNone;
+        }
 
-		[[nodiscard]] inline auto captureTarget(Move move) const
-		{
-			assert(move != NullMove);
-			return boards().pieceAt(move.dst());
-		}
+        [[nodiscard]] std::string toFen() const;
 
-		[[nodiscard]] inline auto isNoisy(Move move) const
-		{
-			assert(move != NullMove);
+        [[nodiscard]] inline bool operator==(const Position& other) const = default;
 
-			return move.isPromo()
-				|| boards().pieceAt(move.dst()) != Piece::None;
-		}
+        void regen();
 
-		[[nodiscard]] inline auto noisyCapturedPiece(Move move) const -> std::pair<bool, Piece>
-		{
-			assert(move != NullMove);
+        [[nodiscard]] Move moveFromUci(std::string_view move) const;
 
-			const auto captured = boards().pieceAt(move.dst());
-			return {captured != Piece::None || move.isPromo(), captured};
-		}
+        [[nodiscard]] inline u32 plyFromStartpos() const {
+            return m_fullmove * 2 - (m_stm == Color::kBlack ? 0 : 1) - 1;
+        }
 
-		[[nodiscard]] auto toFen() const -> std::string;
+        [[nodiscard]] inline i32 classicalMaterial() const {
+            const auto& bbs = m_boards.bbs();
+            return 1 * bbs.pawns().popcount() + 2 * bbs.alfils().popcount() + 2 * bbs.ferzes().popcount()
+                 + 3 * bbs.knights().popcount() + 5 * bbs.rooks().popcount();
+        }
 
-		[[nodiscard]] inline auto operator==(const Position &other) const
-		{
-			const auto &ourState = currState();
-			const auto &theirState = other.m_states.back();
+        [[nodiscard]] static Position starting();
 
-			// every other field is a function of these
-			return ourState.boards == theirState.boards
-				&& ourState.halfmove == theirState.halfmove
-				&& m_fullmove == other.m_fullmove;
-		}
+        [[nodiscard]] static std::optional<Position> fromFenParts(std::span<const std::string_view> fen);
+        [[nodiscard]] static std::optional<Position> fromFen(std::string_view fen);
 
-		[[nodiscard]] inline auto deepEquals(const Position &other) const
-		{
-			return *this == other
-				&& currState().kings == other.m_states.back().kings
-				&& currState().checkers == other.m_states.back().checkers
-				&& currState().pinned == other.m_states.back().pinned
-				&& currState().threats == other.m_states.back().threats
-				&& currState().keys == other.m_states.back().keys;
-		}
+    private:
+        template <bool kUpdateKeys = true>
+        void setPiece(Piece piece, Square square);
+        template <bool kUpdateKeys = true>
+        void removePiece(Piece piece, Square square);
+        template <bool kUpdateKeys = true>
+        void movePieceNoCap(Piece piece, Square src, Square dst);
 
-		auto regen() -> void;
+        template <bool kUpdateKeys = true, bool kUpdateNnue = true>
+        [[nodiscard]] Piece movePiece(Piece piece, Square src, Square dst, eval::NnueUpdates& nnueUpdates);
 
-		[[nodiscard]] auto moveFromUci(const std::string &move) const -> Move;
+        template <bool kUpdateKeys = true, bool kUpdateNnue = true>
+        Piece promotePawn(Piece pawn, Square src, Square dst, eval::NnueUpdates& nnueUpdates);
 
-		[[nodiscard]] inline auto plyFromStartpos() const -> u32
-		{
-			return m_fullmove * 2 - (m_blackToMove ? 0 : 1) - 1;
-		}
+        [[nodiscard]] inline Bitboard calcCheckers() const {
+            const auto color = stm();
+            return attackersTo(m_kings.color(color), oppColor(color));
+        }
 
-		[[nodiscard]] inline auto classicalMaterial() const -> i32
-		{
-			const auto &bbs = currState().boards.bbs();
+        [[nodiscard]] inline Bitboard calcPinned(Color c) const {
+            Bitboard pinned{};
 
-			return 1 * bbs.pawns().popcount()
-				 + 2 * bbs.alfils().popcount()
-				 + 2 * bbs.ferzes().popcount()
-				 + 3 * bbs.knights().popcount()
-				 + 5 * bbs.rooks().popcount();
-		}
+            const auto king = m_kings.color(c);
+            const auto opponent = oppColor(c);
 
-		auto operator=(const Position &) -> Position & = default;
-		auto operator=(Position &&) -> Position & = default;
+            const auto& bbs = m_boards.bbs();
 
-		[[nodiscard]] static auto starting() -> Position;
-		[[nodiscard]] static auto fromFen(const std::string &fen) -> std::optional<Position>;
-		[[nodiscard]] static auto fromFrcIndex(u32 n) -> std::optional<Position>;
-		[[nodiscard]] static auto fromDfrcIndex(u32 n) -> std::optional<Position>;
+            const auto ourOcc = bbs.occupancy(c);
+            const auto oppOcc = bbs.occupancy(opponent);
 
-	private:
-		template <bool UpdateKeys = true>
-		auto setPiece(Piece piece, Square square) -> void;
-		template <bool UpdateKeys = true>
-		auto removePiece(Piece piece, Square square) -> void;
-		template <bool UpdateKeys = true>
-		auto movePieceNoCap(Piece piece, Square src, Square dst) -> void;
+            auto potentialAttackers = attacks::getRookAttacks(king, oppOcc) & bbs.rooks(opponent);
 
-		template <bool UpdateKeys = true, bool UpdateNnue = true>
-		[[nodiscard]] auto movePiece(Piece piece, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece;
+            while (potentialAttackers) {
+                const auto potentialAttacker = potentialAttackers.popLowestSquare();
+                const auto maybePinned = ourOcc & orthoRayBetween(potentialAttacker, king);
 
-		template <bool UpdateKeys = true, bool UpdateNnue = true>
-		auto promotePawn(Piece pawn, Square src, Square dst, eval::NnueUpdates &nnueUpdates) -> Piece;
+                if (maybePinned.one()) {
+                    pinned |= maybePinned;
+                }
+            }
 
-		[[nodiscard]] inline auto calcCheckers() const
-		{
-			const auto color = toMove();
-			const auto &state = currState();
+            return pinned;
+        }
 
-			return attackersTo(state.kings.color(color), oppColor(color));
-		}
+        [[nodiscard]] inline std::array<Bitboard, 2> calcPinned() const {
+            return {calcPinned(Color::kBlack), calcPinned(Color::kWhite)};
+        }
 
-		[[nodiscard]] inline auto calcPinned() const
-		{
-			const auto color = toMove();
-			const auto &state = currState();
+        [[nodiscard]] inline Bitboard calcThreats() const {
+            const auto us = stm();
+            const auto them = oppColor(us);
 
-			Bitboard pinned{};
+            const auto& bbs = m_boards.bbs();
 
-			const auto king = state.kings.color(color);
-			const auto opponent = oppColor(color);
+            Bitboard threats{};
 
-			const auto &bbs = state.boards.bbs();
+            const auto occ = bbs.occupancy();
 
-			const auto ourOcc = bbs.occupancy(color);
-			const auto oppOcc = bbs.occupancy(opponent);
+            auto alfils = bbs.alfils(them);
+            while (alfils) {
+                const auto alfil = alfils.popLowestSquare();
+                threats |= attacks::getAlfilAttacks(alfil);
+            }
 
-			auto potentialAttackers = attacks::getRookAttacks(king, oppOcc) & bbs.rooks(opponent);
+            auto ferzes = bbs.ferzes(them);
+            while (ferzes) {
+                const auto ferz = ferzes.popLowestSquare();
+                threats |= attacks::getFerzAttacks(ferz);
+            }
 
-			while (potentialAttackers)
-			{
-				const auto potentialAttacker = potentialAttackers.popLowestSquare();
-				const auto maybePinned = ourOcc & orthoRayBetween(potentialAttacker, king);
+            auto knights = bbs.knights(them);
+            while (knights) {
+                const auto knight = knights.popLowestSquare();
+                threats |= attacks::getKnightAttacks(knight);
+            }
 
-				if (maybePinned.one())
-					pinned |= maybePinned;
-			}
+            auto rooks = bbs.rooks(them);
+            while (rooks) {
+                const auto rook = rooks.popLowestSquare();
+                threats |= attacks::getRookAttacks(rook, occ);
+            }
 
-			return pinned;
-		}
+            const auto pawns = bbs.pawns(them);
+            if (them == Color::kBlack) {
+                threats |= pawns.shiftDownLeft() | pawns.shiftDownRight();
+            } else {
+                threats |= pawns.shiftUpLeft() | pawns.shiftUpRight();
+            }
 
-		[[nodiscard]] inline auto calcThreats() const
-		{
-			const auto us = toMove();
-			const auto them = oppColor(us);
+            threats |= attacks::getKingAttacks(m_kings.color(them));
 
-			const auto &state = currState();
-			const auto &bbs = state.boards.bbs();
+            return threats;
+        }
 
-			Bitboard threats{};
+        PositionBoards m_boards{};
 
-			const auto occ = bbs.occupancy();
+        Keys m_keys{};
 
-			auto alfils = bbs.alfils(them);
-			while (alfils)
-			{
-				const auto alfil = alfils.popLowestSquare();
-				threats |= attacks::getAlfilAttacks(alfil);
-			}
+        Bitboard m_checkers{};
+        std::array<Bitboard, 2> m_pinned{};
+        Bitboard m_threats{};
 
-			auto ferzes = bbs.ferzes(them);
-			while (ferzes)
-			{
-				const auto ferz = ferzes.popLowestSquare();
-				threats |= attacks::getFerzAttacks(ferz);
-			}
+        u16 m_halfmove{};
+        u32 m_fullmove{1};
 
-			auto knights = bbs.knights(them);
-			while (knights)
-			{
-				const auto knight = knights.popLowestSquare();
-				threats |= attacks::getKnightAttacks(knight);
-			}
+        KingPair m_kings{};
 
-			auto rooks = bbs.rooks(them);
-			while (rooks)
-			{
-				const auto rook = rooks.popLowestSquare();
-				threats |= attacks::getRookAttacks(rook, occ);
-			}
+        Color m_stm{};
+    };
 
-			const auto pawns = bbs.pawns(them);
-			if (them == Color::Black)
-				threats |= pawns.shiftDownLeft() | pawns.shiftDownRight();
-			else threats |= pawns.shiftUpLeft() | pawns.shiftUpRight();
+    static_assert(sizeof(Position) == 216);
 
-			threats |= attacks::getKingAttacks(state.kings.color(them));
+    [[nodiscard]] Square squareFromString(std::string_view str);
+} // namespace oranj
 
-			return threats;
-		}
-
-		bool m_blackToMove{};
-
-		u32 m_fullmove{1};
-
-		std::vector<BoardState> m_states{};
-		std::vector<u64> m_keys{};
-	};
-
-	template <bool UpdateNnue>
-	HistoryGuard<UpdateNnue>::~HistoryGuard()
-	{
-		m_pos.popMove<UpdateNnue>(m_nnueState);
-	}
-
-	[[nodiscard]] auto squareFromString(const std::string &str) -> Square;
-}
+template <>
+struct fmt::formatter<oranj::Position> : fmt::formatter<std::string_view> {
+    format_context::iterator format(const oranj::Position& value, format_context& ctx) const;
+};

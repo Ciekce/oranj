@@ -23,8 +23,7 @@
 #include "core.h"
 #include "position/position.h"
 
-namespace oranj
-{
-	auto perft(Position &pos, i32 depth) -> void;
-	auto splitPerft(Position &pos, i32 depth) -> void;
-}
+namespace oranj {
+    void perft(const Position& pos, i32 depth);
+    void splitPerft(const Position& pos, i32 depth);
+} // namespace oranj

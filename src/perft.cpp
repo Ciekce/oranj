@@ -18,80 +18,73 @@
 
 #include "perft.h"
 
-#include <iostream>
-
 #include "movegen.h"
 #include "uci.h"
 #include "util/timer.h"
 
-namespace oranj
-{
-	using util::Instant;
+namespace oranj {
+    using util::Instant;
 
-	namespace
-	{
-		auto doPerft(Position &pos, i32 depth) -> usize
-		{
-			if (depth == 0)
-				return 1;
+    namespace {
+        usize doPerft(const Position& pos, i32 depth) {
+            if (depth == 0) {
+                return 1;
+            }
 
-			--depth;
+            --depth;
 
-			ScoredMoveList moves{};
-			generateAll(moves, pos);
+            ScoredMoveList moves{};
+            generateAll(moves, pos);
 
-			usize total{};
+            usize total{};
 
-			for (const auto [move, score] : moves)
-			{
-				if (!pos.isLegal(move))
-					continue;
+            for (const auto [move, score] : moves) {
+                if (!pos.isLegal(move)) {
+                    continue;
+                }
 
-				if (depth == 0)
-					++total;
-				else
-				{
-					const auto guard = pos.applyMove<false>(move, nullptr);
-					total += doPerft(pos, depth);
-				}
-			}
+                if (depth == 0) {
+                    ++total;
+                } else {
+                    const auto newPos = pos.applyMove(move);
+                    total += doPerft(newPos, depth);
+                }
+            }
 
-			return total;
-		}
-	}
+            return total;
+        }
+    } // namespace
 
-	auto perft(Position &pos, i32 depth) -> void
-	{
-		std::cout << doPerft(pos, depth) << std::endl;
-	}
+    void perft(const Position& pos, i32 depth) {
+        println("{}", doPerft(pos, depth));
+    }
 
-	auto splitPerft(Position &pos, i32 depth) -> void
-	{
-		--depth;
+    void splitPerft(const Position& pos, i32 depth) {
+        --depth;
 
-		const auto start = Instant::now();
+        const auto start = Instant::now();
 
-		ScoredMoveList moves{};
-		generateAll(moves, pos);
+        ScoredMoveList moves{};
+        generateAll(moves, pos);
 
-		usize total{};
+        usize total{};
 
-		for (const auto [move, score] : moves)
-		{
-			if (!pos.isLegal(move))
-				continue;
+        for (const auto [move, score] : moves) {
+            if (!pos.isLegal(move)) {
+                continue;
+            }
 
-			const auto guard = pos.applyMove<false>(move, nullptr);
+            const auto newPos = pos.applyMove(move);
+            const auto value = doPerft(newPos, depth);
 
-			const auto value = doPerft(pos, depth);
+            total += value;
+            println("{}\t{}", move, value);
+        }
 
-			total += value;
-			std::cout << uci::moveToString(move) << '\t' << value << '\n';
-		}
+        const auto nps = static_cast<usize>(static_cast<f64>(total) / start.elapsed());
 
-		const auto nps = static_cast<usize>(static_cast<f64>(total) / start.elapsed());
-
-		std::cout << "\ntotal " << total << '\n';
-		std::cout << nps << " nps" << std::endl;
-	}
-}
+        println();
+        println("total {}", total);
+        println("{} nps", nps);
+    }
+} // namespace oranj

@@ -25,34 +25,24 @@
 
 #include "core.h"
 
-namespace oranj::wdl
-{
-	// Only used for unnormalisation, as a kind of best effort attempt
-	// Normalisation goes through the wdl model so as to be independent of material
-	constexpr Score Material58NormalizationK = 259;
+namespace oranj::wdl {
+    // Only used for unnormalisation, as a kind of best effort attempt
+    // Normalisation goes through the wdl model so as to be independent of material
+    constexpr Score kMaterial58NormalizationK = 276;
 
-	[[nodiscard]] auto wdlParams(i32 material) -> std::pair<f64, f64>;
-	[[nodiscard]] auto wdlModel(Score povScore, i32 material) -> std::pair<i32, i32>; // [win, loss]
+    [[nodiscard]] std::pair<f64, f64> wdlParams(i32 material);
+    [[nodiscard]] std::pair<i32, i32> wdlModel(Score povScore, i32 material); // [win, loss]
 
-	inline auto normalizeScore(Score score, i32 material)
-	{
-		// don't normalise wins/losses, or zeroes that are pointless to normalise
-		if (score == 0 || std::abs(score) > ScoreWin)
-			return score;
+    inline Score normalizeScore(Score score, [[maybe_unused]] i32 material) {
+        // don't normalise wins/losses, or zeroes that are pointless to normalise
+        if (score == 0 || std::abs(score) > kScoreWin) {
+            return score;
+        }
 
-		/*
-		const auto [a, b] = wdlParams(material);
-		return static_cast<Score>(std::round(100.0 * static_cast<f64>(score) / a));
-		 */
-		return score * 100 / 250;
-	}
+        return score * 100 / 250;
+    }
 
-	inline auto unnormalizeScoreMaterial58(Score score)
-	{
-		/*
-		return score == 0 || std::abs(score) > ScoreWin
-			? score : score * Material58NormalizationK / 100;
-		 */
-		return score > ScoreWin ? score : score * 250 / 100;
-	}
-}
+    inline Score unnormalizeScoreMaterial58(Score score) {
+        return std::abs(score) > kScoreWin ? score : score * 250 / 100;
+    }
+} // namespace oranj::wdl

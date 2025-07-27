@@ -25,113 +25,130 @@
 
 #include "core.h"
 #include "position/position.h"
-#include "util/multi_array.h"
-#include "util/cemath.h"
 #include "search_fwd.h"
 #include "tunable.h"
+#include "util/cemath.h"
+#include "util/multi_array.h"
 
-namespace oranj
-{
-	class CorrectionHistoryTable
-	{
-	public:
-		CorrectionHistoryTable() = default;
-		~CorrectionHistoryTable() = default;
+namespace oranj {
+    class CorrectionHistoryTable {
+    public:
+        inline void clear() {
+            std::memset(&m_pawnTable, 0, sizeof(m_pawnTable));
+            std::memset(&m_blackNonPawnTable, 0, sizeof(m_blackNonPawnTable));
+            std::memset(&m_whiteNonPawnTable, 0, sizeof(m_whiteNonPawnTable));
+            std::memset(&m_majorTable, 0, sizeof(m_majorTable));
+            std::memset(&m_contTable, 0, sizeof(m_contTable));
+        }
 
-		inline auto clear()
-		{
-			std::memset(&m_pawnTable, 0, sizeof(m_pawnTable));
-			std::memset(&m_blackNonPawnTable, 0, sizeof(m_blackNonPawnTable));
-			std::memset(&m_whiteNonPawnTable, 0, sizeof(m_whiteNonPawnTable));
-			std::memset(&m_majorTable, 0, sizeof(m_majorTable));
-			std::memset(&m_contTable, 0, sizeof(m_contTable));
-		}
+        inline void update(
+            const Position& pos,
+            std::span<search::PlayedMove> moves,
+            i32 ply,
+            i32 depth,
+            Score searchScore,
+            Score staticEval
+        ) {
+            const auto bonus = std::clamp((searchScore - staticEval) * depth / 8, -kMaxBonus, kMaxBonus);
 
-		inline auto update(const Position &pos, std::span<search::PlayedMove> moves,
-			i32 ply, i32 depth, Score searchScore, Score staticEval)
-		{
-			const auto scaledError = static_cast<i32>((searchScore - staticEval) * Grain);
-			const auto newWeight = static_cast<i32>(std::min(depth + 1, 16));
+            const auto stm = static_cast<i32>(pos.stm());
 
-			const auto stm = static_cast<i32>(pos.toMove());
+            const auto updateCont = [&](i32 i) {
+                if (ply <= i) {
+                    return;
+                }
 
-			m_pawnTable[stm][pos.pawnKey() % Entries].update(scaledError, newWeight);
-			m_blackNonPawnTable[stm][pos.blackNonPawnKey() % Entries].update(scaledError, newWeight);
-			m_whiteNonPawnTable[stm][pos.whiteNonPawnKey() % Entries].update(scaledError, newWeight);
-			m_majorTable[stm][pos.majorKey() % Entries].update(scaledError, newWeight);
+                const auto [moving1, dst1] = moves[ply - 1];
+                const auto [moving2, dst2] = moves[ply - 1 - i];
 
-			if (ply >= 2)
-			{
-				const auto [moving2, dst2] = moves[ply - 2];
-				const auto [moving1, dst1] = moves[ply - 1];
+                if (moving1 == Piece::kNone || moving2 == Piece::kNone) {
+                    return;
+                }
 
-				if (moving2 != Piece::None && moving1 != Piece::None)
-					m_contTable[stm][static_cast<i32>(pieceType(moving2))][static_cast<i32>(dst2)]
-						[static_cast<i32>(pieceType(moving1))][static_cast<i32>(dst1)].update(scaledError, newWeight);
-			}
-		}
+                m_contTable[stm][static_cast<i32>(moving2)][static_cast<i32>(dst2)]
+                           [static_cast<i32>(pieceType(moving1))][static_cast<i32>(dst1)]
+                               .update(bonus);
+            };
 
-		[[nodiscard]] inline auto correct(const Position &pos,
-			std::span<search::PlayedMove> moves, i32 ply, Score score) const
-		{
-			using namespace tunable;
+            m_pawnTable[stm][pos.pawnKey() % kEntries].update(bonus);
+            m_blackNonPawnTable[stm][pos.blackNonPawnKey() % kEntries].update(bonus);
+            m_whiteNonPawnTable[stm][pos.whiteNonPawnKey() % kEntries].update(bonus);
+            m_majorTable[stm][pos.majorKey() % kEntries].update(bonus);
 
-			const auto stm = static_cast<i32>(pos.toMove());
+            updateCont(1);
+            updateCont(2);
+            updateCont(4);
+        }
 
-			const auto [blackNpWeight, whiteNpWeight] = pos.toMove() == Color::Black
-				? std::pair{ stmNonPawnCorrhistWeight(), nstmNonPawnCorrhistWeight()}
-				: std::pair{nstmNonPawnCorrhistWeight(),  stmNonPawnCorrhistWeight()};
+        [[nodiscard]] inline Score correct(
+            const Position& pos,
+            std::span<search::PlayedMove> moves,
+            i32 ply,
+            Score score
+        ) const {
+            using namespace tunable;
 
-			i32 correction{};
+            const auto stm = static_cast<i32>(pos.stm());
 
-			correction += pawnCorrhistWeight() * m_pawnTable[stm][pos.pawnKey() % Entries];
-			correction += blackNpWeight * m_blackNonPawnTable[stm][pos.blackNonPawnKey() % Entries];
-			correction += whiteNpWeight * m_whiteNonPawnTable[stm][pos.whiteNonPawnKey() % Entries];
-			correction += majorCorrhistWeight() * m_majorTable[stm][pos.majorKey() % Entries];
+            const auto contAdjustment = [&](i32 i, i32 weight) {
+                if (ply <= i) {
+                    return 0;
+                }
 
-			if (ply >= 2)
-			{
-				const auto [moving2, dst2] = moves[ply - 2];
-				const auto [moving1, dst1] = moves[ply - 1];
+                const auto [moving1, dst1] = moves[ply - 1];
+                const auto [moving2, dst2] = moves[ply - 1 - i];
 
-				if (moving2 != Piece::None && moving1 != Piece::None)
-					correction += contCorrhistWeight() * m_contTable[stm]
-						[static_cast<i32>(pieceType(moving2))][static_cast<i32>(dst2)]
-						[static_cast<i32>(pieceType(moving1))][static_cast<i32>(dst1)];
-			}
+                if (moving1 == Piece::kNone || moving2 == Piece::kNone) {
+                    return 0;
+                }
 
-			score += correction / 128;
+                return weight
+                     * m_contTable[stm][static_cast<i32>(moving2)][static_cast<i32>(dst2)]
+                                  [static_cast<i32>(pieceType(moving1))][static_cast<i32>(dst1)];
+            };
 
-			return std::clamp(score, -ScoreWin + 1, ScoreWin - 1);
-		}
+            const auto [blackNpWeight, whiteNpWeight] =
+                pos.stm() == Color::kBlack ? std::pair{stmNonPawnCorrhistWeight(), nstmNonPawnCorrhistWeight()}
+                                           : std::pair{nstmNonPawnCorrhistWeight(), stmNonPawnCorrhistWeight()};
 
-	private:
-		static constexpr usize Entries = 16384;
+            i32 correction{};
 
-		static constexpr i32 Grain = 256;
-		static constexpr i32 WeightScale = 256;
-		static constexpr i32 Max = Grain * 32;
+            correction += pawnCorrhistWeight() * m_pawnTable[stm][pos.pawnKey() % kEntries];
+            correction += blackNpWeight * m_blackNonPawnTable[stm][pos.blackNonPawnKey() % kEntries];
+            correction += whiteNpWeight * m_whiteNonPawnTable[stm][pos.whiteNonPawnKey() % kEntries];
+            correction += majorCorrhistWeight() * m_majorTable[stm][pos.majorKey() % kEntries];
 
-		struct Entry
-		{
-			i16 value{};
+            correction += contAdjustment(1, contCorrhist1Weight());
+            correction += contAdjustment(2, contCorrhist2Weight());
+            correction += contAdjustment(4, contCorrhist4Weight());
 
-			inline auto update(i32 scaledError, i32 newWeight) -> void
-			{
-				const auto v = util::ilerp<WeightScale>(value, scaledError, newWeight);
-				value = static_cast<i16>(std::clamp(v, -Max, Max));
-			}
+            score += correction / 2048;
 
-			[[nodiscard]] inline operator i32() const
-			{
-				return value / Grain;
-			}
-		};
+            return std::clamp(score, -kScoreWin + 1, kScoreWin - 1);
+        }
 
-		util::MultiArray<Entry, 2, Entries> m_pawnTable{};
-		util::MultiArray<Entry, 2, Entries> m_blackNonPawnTable{};
-		util::MultiArray<Entry, 2, Entries> m_whiteNonPawnTable{};
-		util::MultiArray<Entry, 2, Entries> m_majorTable{};
-		util::MultiArray<Entry, 2, 6, 64, 6, 64> m_contTable{};
-	};
-}
+    private:
+        static constexpr usize kEntries = 16384;
+
+        static constexpr i32 kLimit = 1024;
+        static constexpr i32 kMaxBonus = kLimit / 4;
+
+        struct Entry {
+            i16 value{};
+
+            inline void update(i32 bonus) {
+                value += bonus - value * std::abs(bonus) / kLimit;
+            }
+
+            [[nodiscard]] inline operator i32() const {
+                return value;
+            }
+        };
+
+        util::MultiArray<Entry, 2, kEntries> m_pawnTable{};
+        util::MultiArray<Entry, 2, kEntries> m_blackNonPawnTable{};
+        util::MultiArray<Entry, 2, kEntries> m_whiteNonPawnTable{};
+        util::MultiArray<Entry, 2, kEntries> m_majorTable{};
+        util::MultiArray<Entry, 2, 12, 64, 6, 64> m_contTable{};
+    };
+} // namespace oranj

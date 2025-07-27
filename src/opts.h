@@ -20,36 +20,36 @@
 
 #include "types.h"
 
-#include "wdl.h"
 #include "util/range.h"
+#include "wdl.h"
 
-namespace oranj
-{
-	namespace opts
-	{
-		constexpr u32 DefaultThreadCount = 1;
-		constexpr auto ThreadCountRange = util::Range<u32>{1,  2048};
+namespace oranj {
+    namespace opts {
+        constexpr u32 kDefaultThreadCount = 1;
+        constexpr auto kThreadCountRange = util::Range<u32>{1, 2048};
 
-		constexpr i32 DefaultNormalizedContempt = 0;
+        constexpr auto kMultiPvRange = util::Range<u32>{1, 256};
 
-		struct GlobalOptions
-		{
-			u32 threads{DefaultThreadCount};
+        constexpr i32 kDefaultNormalizedContempt = 0;
 
-			bool chess960{false};
-			bool showWdl{true};
-			bool showCurrMove{false};
+        struct GlobalOptions {
+            u32 threads{kDefaultThreadCount};
 
-			bool softNodes{false};
-			i32 softNodeHardLimitMultiplier{1678};
+            bool showWdl{true};
+            bool showCurrMove{false};
 
-			bool enableWeirdTcs{false};
+            u32 multiPv{1};
 
-			i32 contempt{wdl::unnormalizeScoreMaterial58(DefaultNormalizedContempt)};
-		};
+            bool softNodes{false};
+            i32 softNodeHardLimitMultiplier{1678};
 
-		auto mutableOpts() -> GlobalOptions &;
-	}
+            bool enableWeirdTcs{false};
 
-	extern const opts::GlobalOptions &g_opts;
-}
+            i32 contempt{wdl::unnormalizeScoreMaterial58(kDefaultNormalizedContempt)};
+        };
+
+        GlobalOptions& mutableOpts();
+    } // namespace opts
+
+    extern const opts::GlobalOptions& g_opts;
+} // namespace oranj

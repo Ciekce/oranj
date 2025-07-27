@@ -1,5 +1,16 @@
+ifeq ($(OS), Windows_NT)
+    DETECTED_OS := Windows
+else
+    DETECTED_OS := $(shell uname -s)
+endif
+
+ifeq ($(DETECTED_OS),Darwin)
+VERSION := $(shell cat version.txt)
+DEFAULT_NET := $(shell cat network.txt)
+else
 VERSION := $(file < version.txt)
 DEFAULT_NET := $(file < network.txt)
+endif
 
 ifndef EXE
     EXE = oranj-$(VERSION)
@@ -13,23 +24,24 @@ endif
 
 PGO = off
 COMMIT_HASH = off
+DISABLE_NEON_DOTPROD = off
 
-SOURCES_COMMON := src/main.cpp src/uci.cpp src/util/split.cpp src/position/position.cpp src/movegen.cpp src/search.cpp src/util/timer.cpp src/pretty.cpp src/ttable.cpp src/limit/time.cpp src/eval/nnue.cpp src/perft.cpp src/bench.cpp src/tunable.cpp src/opts.cpp src/datagen/datagen.cpp src/wdl.cpp src/cuckoo.cpp src/datagen/marlinformat.cpp src/datagen/viriformat.cpp src/datagen/fen.cpp src/3rdparty/zstd/zstddeclib.c src/eval/nnue/io_impl.cpp src/util/ctrlc.cpp
+SOURCES_COMMON := src/3rdparty/fmt/src/format.cc src/main.cpp src/core.cpp src/uci.cpp src/util/split.cpp src/move.cpp src/position/position.cpp src/movegen.cpp src/search.cpp src/util/timer.cpp src/ttable.cpp src/limit/time.cpp src/eval/nnue.cpp src/perft.cpp src/bench.cpp src/tunable.cpp src/opts.cpp src/datagen/datagen.cpp src/wdl.cpp src/cuckoo.cpp src/datagen/marlinformat.cpp src/datagen/viriformat.cpp src/datagen/fen.cpp src/3rdparty/zstd/zstddeclib.c src/eval/nnue/io_impl.cpp src/util/ctrlc.cpp src/stats.cpp
 SOURCES_BMI2 := src/attacks/bmi2/attacks.cpp
 SOURCES_BLACK_MAGIC := src/attacks/black_magic/attacks.cpp
 
 SUFFIX :=
 
 CXX := clang++
-CXXFLAGS := -std=c++20 -O3 -flto -DNDEBUG -DOJ_NETWORK_FILE=\"$(EVALFILE)\" -DOJ_VERSION=$(VERSION)
+# silence warning for fathom
+CXXFLAGS := -Isrc/3rdparty/fmt/include -std=c++20 -O3 -flto -DNDEBUG -DOJ_NETWORK_FILE=\"$(EVALFILE)\" -DOJ_VERSION=$(VERSION) -D_SILENCE_CXX20_ATOMIC_INIT_DEPRECATION_WARNING
 
 CXXFLAGS_NATIVE := -DOJ_NATIVE -march=native
 CXXFLAGS_TUNABLE := -DOJ_NATIVE -march=native -DOJ_EXTERNAL_TUNE=1
-CXXFLAGS_VNNI512 := -DOJ_VNNI512 -DOJ_FAST_PEXT -march=znver4 -mtune=znver4
-CXXFLAGS_AVX512 := -DOJ_AVX512 -DOJ_FAST_PEXT -march=x86-64-v4 -mtune=skylake-avx512
-CXXFLAGS_AVX2_BMI2 := -DOJ_AVX2_BMI2 -DOJ_FAST_PEXT -march=haswell -mtune=haswell
+CXXFLAGS_VNNI512 := -DOJ_VNNI512 -DOJ_FAST_PEXT -march=znver5 -mtune=znver5
+CXXFLAGS_AVX512 := -DOJ_AVX512 -DOJ_FAST_PEXT -march=skylake-avx512 -mtune=znver4
+CXXFLAGS_AVX2_BMI2 := -DOJ_AVX2_BMI2 -DOJ_FAST_PEXT -march=haswell -mtune=znver3
 CXXFLAGS_AVX2 := -DOJ_AVX2 -march=bdver4 -mno-tbm -mno-sse4a -mno-bmi2 -mtune=znver2
-CXXFLAGS_SSE41_POPCNT := -DOJ_SSE41_POPCNT -march=nehalem -mtune=sandybridge
 
 LDFLAGS :=
 
@@ -43,12 +55,12 @@ ifeq (, $(findstring clang,$(COMPILER_VERSION)))
     endif
 endif
 
-ifeq ($(OS), Windows_NT)
-    DETECTED_OS := Windows
+ifeq ($(DETECTED_OS), Windows)
     SUFFIX := .exe
+    # for fathom
+    CXXFLAGS += -D_CRT_SECURE_NO_WARNINGS
     RM := del
 else
-    DETECTED_OS := $(shell uname -s)
     SUFFIX :=
     LDFLAGS += -pthread
     # don't ask
@@ -95,11 +107,17 @@ ifneq ($(findstring __BMI2__, $(ARCH_DEFINES)),)
     endif
 endif
 
+ifneq ($(findstring __ARM_ARCH, $(ARCH_DEFINES)),)
+    ifeq ($(DISABLE_NEON_DOTPROD),on)
+        CXXFLAGS_NATIVE += -DOJ_DISABLE_NEON_DOTPROD
+    endif
+endif
+
 ifeq ($(COMMIT_HASH),on)
     CXXFLAGS += -DOJ_COMMIT_HASH=$(shell git log -1 --pretty=format:%h)
 endif
 
-PROFILE_OUT = oj_profile$(SUFFIX)
+PROFILE_OUT = OJ_profile$(SUFFIX)
 
 ifneq ($(PGO),on)
 define build
@@ -117,7 +135,7 @@ define build
 endef
 endif
 
-release: vnni512 avx512 avx2-bmi2 avx2 sse41-popcnt
+release: vnni512 avx512 avx2-bmi2 avx2
 all: native release
 
 .PHONY: all
@@ -151,9 +169,6 @@ avx2-bmi2: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BMI2)
 
 avx2: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BLACK_MAGIC)
 	$(call build,AVX2,avx2)
-
-sse41-popcnt: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BLACK_MAGIC)
-	$(call build,SSE41_POPCNT,sse41-popcnt)
 
 clean:
 

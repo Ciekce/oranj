@@ -20,10 +20,9 @@
 
 #include "../types.h"
 
+#include <string_view>
 #include <vector>
-#include <string>
 
-namespace oranj::split
-{
-	auto split(const std::string &str, char delim) -> std::vector<std::string>;
+namespace oranj::split {
+    void split(std::vector<std::string_view>& dst, std::string_view str, char delim);
 }

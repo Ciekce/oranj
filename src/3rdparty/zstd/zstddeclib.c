@@ -2623,7 +2623,7 @@ FSE_PUBLIC_API size_t FSE_buildDTable_wksp(FSE_DTable* dt, const short* normaliz
 
 #define FSE_DECOMPRESS_WKOJ_SIZE_U32(maxTableLog, maxSymbolValue) (FSE_DTABLE_SIZE_U32(maxTableLog) + 1 + FSE_BUILD_DTABLE_WKOJ_SIZE_U32(maxTableLog, maxSymbolValue) + (FSE_MAX_SYMBOL_VALUE + 1) / 2 + 1)
 #define FSE_DECOMPRESS_WKOJ_SIZE(maxTableLog, maxSymbolValue) (FSE_DECOMPRESS_WKOJ_SIZE_U32(maxTableLog, maxSymbolValue) * sizeof(unsigned))
-size_t FSE_decompress_wksp_bmi2(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize, int bmi2);
+size_t FSE_decompress_wkOJ_bmi2(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize, int bmi2);
 /**< same as FSE_decompress(), using an externally allocated `workSpace` produced with `FSE_DECOMPRESS_WKOJ_SIZE_U32(maxLog, maxSymbolValue)`.
  * Set bmi2 to 1 if your CPU supports BMI2 or 0 if it doesn't */
 
@@ -3519,7 +3519,7 @@ HUF_readStats_body(BYTE* huffWeight, size_t hwSize, U32* rankStats,
     else  {   /* header compressed with FSE (normal case) */
         if (iSize+1 > srcSize) return ERROR(srcSize_wrong);
         /* max (hwSize-1) values decoded, as last one is implied */
-        oSize = FSE_decompress_wksp_bmi2(huffWeight, hwSize-1, ip+1, iSize, 6, workSpace, wkspSize, bmi2);
+        oSize = FSE_decompress_wkOJ_bmi2(huffWeight, hwSize-1, ip+1, iSize, 6, workSpace, wkspSize, bmi2);
         if (FSE_isError(oSize)) return oSize;
     }
 
@@ -3897,7 +3897,7 @@ typedef struct {
 } FSE_DecompressWksp;
 
 
-FORCE_INLINE_TEMPLATE size_t FSE_decompress_wksp_body(
+FORCE_INLINE_TEMPLATE size_t FSE_decompress_wkOJ_body(
         void* dst, size_t dstCapacity,
         const void* cSrc, size_t cSrcSize,
         unsigned maxLog, void* workSpace, size_t wkspSize,
@@ -3946,27 +3946,27 @@ FORCE_INLINE_TEMPLATE size_t FSE_decompress_wksp_body(
 }
 
 /* Avoids the FORCE_INLINE of the _body() function. */
-static size_t FSE_decompress_wksp_body_default(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize)
+static size_t FSE_decompress_wkOJ_body_default(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize)
 {
-    return FSE_decompress_wksp_body(dst, dstCapacity, cSrc, cSrcSize, maxLog, workSpace, wkspSize, 0);
+    return FSE_decompress_wkOJ_body(dst, dstCapacity, cSrc, cSrcSize, maxLog, workSpace, wkspSize, 0);
 }
 
 #if DYNAMIC_BMI2
-BMI2_TARGET_ATTRIBUTE static size_t FSE_decompress_wksp_body_bmi2(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize)
+BMI2_TARGET_ATTRIBUTE static size_t FSE_decompress_wkOJ_body_bmi2(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize)
 {
-    return FSE_decompress_wksp_body(dst, dstCapacity, cSrc, cSrcSize, maxLog, workSpace, wkspSize, 1);
+    return FSE_decompress_wkOJ_body(dst, dstCapacity, cSrc, cSrcSize, maxLog, workSpace, wkspSize, 1);
 }
 #endif
 
-size_t FSE_decompress_wksp_bmi2(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize, int bmi2)
+size_t FSE_decompress_wkOJ_bmi2(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, unsigned maxLog, void* workSpace, size_t wkspSize, int bmi2)
 {
 #if DYNAMIC_BMI2
     if (bmi2) {
-        return FSE_decompress_wksp_body_bmi2(dst, dstCapacity, cSrc, cSrcSize, maxLog, workSpace, wkspSize);
+        return FSE_decompress_wkOJ_body_bmi2(dst, dstCapacity, cSrc, cSrcSize, maxLog, workSpace, wkspSize);
     }
 #endif
     (void)bmi2;
-    return FSE_decompress_wksp_body_default(dst, dstCapacity, cSrc, cSrcSize, maxLog, workSpace, wkspSize);
+    return FSE_decompress_wkOJ_body_default(dst, dstCapacity, cSrc, cSrcSize, maxLog, workSpace, wkspSize);
 }
 
 #endif   /* FSE_COMMONDEFS_ONLY */

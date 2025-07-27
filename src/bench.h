@@ -22,15 +22,16 @@
 
 #include "search.h"
 
-namespace oranj::bench
-{
-#ifdef OJ_PGO_PROFILE
-	constexpr i32 DefaultBenchDepth = 14;
+namespace oranj::bench {
+#if OJ_SPARSE_BENCH_FT_SIZE > 0
+    constexpr i32 kDefaultBenchDepth = 24;
+#elif defined(OJ_PGO_PROFILE)
+    constexpr i32 kDefaultBenchDepth = 14;
 #else
-	constexpr i32 DefaultBenchDepth = 20;
+    constexpr i32 kDefaultBenchDepth = 20;
 #endif
 
-	constexpr usize DefaultBenchTtSize = 16;
+    constexpr usize kDefaultBenchTtSize = 16;
 
-	auto run(search::Searcher &searcher, i32 depth = DefaultBenchDepth) -> void;
-}
+    void run(search::Searcher& searcher, i32 depth = kDefaultBenchDepth);
+} // namespace oranj::bench

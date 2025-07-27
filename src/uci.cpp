@@ -18,970 +18,914 @@
 
 #include "uci.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <iostream>
 #include <string>
-#include <sstream>
 #include <vector>
-#include <cmath>
-#include <cctype>
-#include <algorithm>
-#include <iomanip>
-#include <atomic>
-#include <unordered_map>
 
-#include "util/split.h"
-#include "util/parse.h"
-#include "util/timer.h"
+#include "bench.h"
+#include "eval/eval.h"
+#include "limit/compound.h"
+#include "limit/time.h"
+#include "limit/trivial.h"
+#include "movegen.h"
+#include "opts.h"
+#include "perft.h"
 #include "position/position.h"
 #include "search.h"
-#include "movegen.h"
-#include "eval/eval.h"
-#include "pretty.h"
 #include "ttable.h"
-#include "limit/trivial.h"
-#include "limit/time.h"
-#include "limit/compound.h"
-#include "perft.h"
-#include "bench.h"
-#include "opts.h"
 #include "tunable.h"
+#include "util/parse.h"
+#include "util/split.h"
+#include "util/timer.h"
 #include "wdl.h"
 
-namespace oranj
-{
-	using namespace uci;
+namespace oranj {
+    using namespace uci;
 
-	using util::Instant;
+    using util::Instant;
 
-	namespace
-	{
-		constexpr auto Name = "oranj";
-		constexpr auto Version = OJ_STRINGIFY(OJ_VERSION);
-		constexpr auto Author = "Ciekce";
+    namespace {
+        constexpr auto kName = "oranj";
+        constexpr auto kVersion = OJ_STRINGIFY(OJ_VERSION);
+        constexpr auto kAuthor = "Ciekce";
 
 #if OJ_EXTERNAL_TUNE
-		auto tunableParams() -> auto &
-		{
-			static auto params = []
-			{
-				std::vector<tunable::TunableParam> params{};
-				params.reserve(128);
-				return params;
-			}();
+        std::vector<tunable::TunableParam>& tunableParams() {
+            static auto params = [] {
+                std::vector<tunable::TunableParam> params{};
+                params.reserve(128);
+                return params;
+            }();
 
-			return params;
-		}
+            return params;
+        }
 
-		inline auto lookupTunableParam(const std::string &name) -> tunable::TunableParam *
-		{
-			for (auto &param : tunableParams())
-			{
-				if (param.lowerName == name)
-					return &param;
-			}
+        inline tunable::TunableParam* lookupTunableParam(std::string_view name) {
+            for (auto& param : tunableParams()) {
+                if (param.lowerName == name) {
+                    return &param;
+                }
+            }
 
-			return nullptr;
-		}
+            return nullptr;
+        }
 #endif
 
-		class UciHandler
-		{
-		public:
-			UciHandler() = default;
-			~UciHandler();
+        class UciHandler {
+        public:
+            ~UciHandler();
 
-			auto run() -> i32;
+            i32 run();
 
-		private:
-			auto handleUci() -> void;
-			auto handleUcinewgame() -> void;
-			auto handleIsready() -> void;
-			auto handlePosition(const std::vector<std::string> &tokens) -> void;
-			auto handleGo(const std::vector<std::string> &tokens, Instant startTime) -> void;
-			auto handleStop() -> void;
-			auto handleSetoption(const std::vector<std::string> &tokens) -> void;
-			// V ======= NONSTANDARD ======= V
-			auto handleD() -> void;
-			auto handleCheckers() -> void;
-			auto handleThreats() -> void;
-			auto handleEval() -> void;
-			auto handleRawEval() -> void;
-			auto handleRegen() -> void;
-			auto handleMoves() -> void;
-			auto handlePerft(const std::vector<std::string> &tokens) -> void;
-			auto handleSplitperft(const std::vector<std::string> &tokens) -> void;
-			auto handleBench(const std::vector<std::string> &tokens) -> void;
+        private:
+            void handleUci();
+            void handleUcinewgame();
+            void handleIsready();
+            void handlePosition(std::span<const std::string_view> args);
+            void handleGo(std::span<const std::string_view> args, Instant startTime);
+            void handleStop();
+            void handleSetoption(std::span<const std::string_view> args);
+            // V ======= NONSTANDARD ======= V
+            void handleD();
+            void handleFen();
+            void handleCheckers();
+            void handleThreats();
+            void handleEval();
+            void handleRawEval();
+            void handleRegen();
+            void handleMoves();
+            void handlePerft(std::span<const std::string_view> args);
+            void handleSplitperft(std::span<const std::string_view> args);
+            void handleBench(std::span<const std::string_view> args);
+            void handleWait();
 
-			search::Searcher m_searcher{};
+            bool m_tbInitialized{false};
 
-			Position m_pos{Position::starting()};
+            search::Searcher m_searcher{};
 
-			i32 m_moveOverhead{limit::DefaultMoveOverhead};
-		};
+            std::vector<u64> m_keyHistory{};
+            Position m_pos{Position::starting()};
 
-		UciHandler::~UciHandler()
-		{
-			m_searcher.quit();
-		}
+            i32 m_moveOverhead{limit::kDefaultMoveOverhead};
+        };
 
-		auto UciHandler::run() -> i32
-		{
-			for (std::string line{}; std::getline(std::cin, line);)
-			{
-				const auto startTime = Instant::now();
+        UciHandler::~UciHandler() {
+            m_searcher.quit();
+        }
 
-				const auto tokens = split::split(line, ' ');
+        i32 UciHandler::run() {
+            std::vector<std::string_view> tokens{};
 
-				if (tokens.empty())
-					continue;
+            for (std::string line{}; std::getline(std::cin, line);) {
+                const auto startTime = Instant::now();
 
-				const auto &command = tokens[0];
+                tokens.clear();
+                split::split(tokens, line, ' ');
 
-				if (command == "quit")
-					return 0;
-				else if (command == "uci")
-					handleUci();
-				else if (command == "ucinewgame")
-					handleUcinewgame();
-				else if (command == "isready")
-					handleIsready();
-				else if (command == "position")
-					handlePosition(tokens);
-				else if (command == "go")
-					handleGo(tokens, startTime);
-				else if (command == "stop")
-					handleStop();
-				else if (command == "setoption")
-					handleSetoption(tokens);
-				// V ======= NONSTANDARD ======= V
-				else if (command == "d")
-					handleD();
-				else if (command == "eval")
-					handleEval();
-				else if (command == "raweval")
-					handleRawEval();
-				else if (command == "checkers")
-					handleCheckers();
-				else if (command == "threats")
-					handleThreats();
-				else if (command == "regen")
-					handleRegen();
-				else if (command == "moves")
-					handleMoves();
-				else if (command == "perft")
-					handlePerft(tokens);
-				else if (command == "splitperft")
-					handleSplitperft(tokens);
-				else if (command == "bench")
-					handleBench(tokens);
-			}
+                if (tokens.empty()) {
+                    continue;
+                }
 
-			return 0;
-		}
+                const auto command = tokens[0];
+                const auto args = std::span{tokens}.subspan<1>();
 
-		auto UciHandler::handleUci() -> void
-		{
-			static const opts::GlobalOptions defaultOpts{};
+                if (command == "quit") {
+                    return 0;
+                } else if (command == "uci") {
+                    handleUci();
+                } else if (command == "ucinewgame") {
+                    handleUcinewgame();
+                } else if (command == "isready") {
+                    handleIsready();
+                } else if (command == "position") {
+                    handlePosition(args);
+                } else if (command == "go") {
+                    handleGo(args, startTime);
+                } else if (command == "stop") {
+                    handleStop();
+                } else if (command == "setoption") {
+                    handleSetoption(args);
+                    // V ======= NONSTANDARD ======= V
+                } else if (command == "d") {
+                    handleD();
+                } else if (command == "fen") {
+                    handleFen();
+                } else if (command == "eval") {
+                    handleEval();
+                } else if (command == "raweval") {
+                    handleRawEval();
+                } else if (command == "checkers") {
+                    handleCheckers();
+                } else if (command == "threats") {
+                    handleThreats();
+                } else if (command == "regen") {
+                    handleRegen();
+                } else if (command == "moves") {
+                    handleMoves();
+                } else if (command == "perft") {
+                    handlePerft(args);
+                } else if (command == "splitperft") {
+                    handleSplitperft(args);
+                } else if (command == "bench") {
+                    handleBench(args);
+                } else if (command == "wait") {
+                    handleWait();
+                }
+            }
+
+            return 0;
+        }
+
+        void UciHandler::handleUci() {
+            static const opts::GlobalOptions defaultOpts{};
 
 #ifdef OJ_COMMIT_HASH
-			std::cout << "id name " << Name << ' ' << Version << ' ' << OJ_STRINGIFY(OJ_COMMIT_HASH) << '\n';
+            println("id name {} {} {}", kName, kVersion, OJ_STRINGIFY(OJ_COMMIT_HASH));
 #else
-			std::cout << "id name " << Name << ' ' << Version << '\n';
+            println("id name {} {}", kName, kVersion);
 #endif
-			std::cout << "id author " << Author << '\n';
+            println("id author {}", kAuthor);
 
-			std::cout << std::boolalpha;
-
-			std::cout << "option name UCI_Variant type combo default shatranj var shatranj\n";
-			std::cout << "option name Hash type spin default " << DefaultTtSizeMib
-			          << " min " << TtSizeMibRange.min() << " max " << TtSizeMibRange.max() << '\n';
-			std::cout << "option name Clear Hash type button\n";
-			std::cout << "option name Threads type spin default " << opts::DefaultThreadCount
-				<< " min " << opts::ThreadCountRange.min() << " max " << opts::ThreadCountRange.max() << '\n';
-			std::cout << "option name Contempt type spin default " << opts::DefaultNormalizedContempt
-				<< " min " << ContemptRange.min() << " max " << ContemptRange.max() << '\n';
-			std::cout << "option name UCI_Chess960 type check default " << defaultOpts.chess960 << '\n';
-			std::cout << "option name UCI_ShowWDL type check default " << defaultOpts.showWdl << '\n';
-			std::cout << "option name ShowCurrMove type check default " << defaultOpts.showCurrMove << '\n';
-			std::cout << "option name Move Overhead type spin default " << limit::DefaultMoveOverhead
-				<< " min " << limit::MoveOverheadRange.min() << " max " << limit::MoveOverheadRange.max() << '\n';
-			std::cout << "option name SoftNodes type check default " << defaultOpts.softNodes << std::endl;
-			std::cout << "option name SoftNodeHardLimitMultiplier type spin default "
-				<< defaultOpts.softNodeHardLimitMultiplier
-				<< " min " << limit::SoftNodeHardLimitMultiplierRange.min()
-				<< " max " << limit::SoftNodeHardLimitMultiplierRange.max() << '\n';
-			std::cout << "option name EnableWeirdTCs type check default " << defaultOpts.enableWeirdTcs << std::endl;
-			std::cout << "option name EvalFile type string default <internal>" << std::endl;
+            println("option name UCI_Variant type combo default shatranj var shatranj");
+            println(
+                "option name Hash type spin default {} min {} max {}",
+                kDefaultTtSizeMib,
+                kTtSizeMibRange.min(),
+                kTtSizeMibRange.max()
+            );
+            println("option name Clear Hash type button");
+            println(
+                "option name Threads type spin default {} min {} max {}",
+                opts::kDefaultThreadCount,
+                opts::kThreadCountRange.min(),
+                opts::kThreadCountRange.max()
+            );
+            println(
+                "option name MultiPV type spin default {} min {} max {}",
+                defaultOpts.multiPv,
+                opts::kMultiPvRange.min(),
+                opts::kMultiPvRange.max()
+            );
+            println(
+                "option name Contempt type spin default {} min {} max {}",
+                opts::kDefaultNormalizedContempt,
+                kContemptRange.min(),
+                kContemptRange.max()
+            );
+            println("option name UCI_ShowWDL type check default {}", defaultOpts.showWdl);
+            println("option name ShowCurrMove type check default {}", defaultOpts.showCurrMove);
+            println(
+                "option name Move Overhead type spin default {} min {} max {}",
+                limit::kDefaultMoveOverhead,
+                limit::kMoveOverheadRange.min(),
+                limit::kMoveOverheadRange.max()
+            );
+            println("option name SoftNodes type check default {}", defaultOpts.softNodes);
+            println(
+                "option name SoftNodeHardLimitMultiplier type spin default {} min {} max {}",
+                defaultOpts.softNodeHardLimitMultiplier,
+                limit::kSoftNodeHardLimitMultiplierRange.min(),
+                limit::kSoftNodeHardLimitMultiplierRange.max()
+            );
+            println("option name EnableWeirdTCs type check default {}", defaultOpts.enableWeirdTcs);
+            println("option name EvalFile type string default <internal>");
 
 #if OJ_EXTERNAL_TUNE
-			for (const auto &param : tunableParams())
-			{
-				std::cout << "option name " << param.name << " type spin default " << param.defaultValue
-					<< " min " << param.range.min() << " max " << param.range.max() << std::endl;
-			}
+            for (const auto& param : tunableParams()) {
+                println(
+                    "option name {} type spin default {} min {} max {}",
+                    param.name,
+                    param.defaultValue,
+                    param.range.min(),
+                    param.range.max()
+                );
+            }
 #endif
 
-			std::cout << "uciok" << std::endl;
-		}
+            println("uciok");
+        }
 
-		auto UciHandler::handleUcinewgame() -> void
-		{
-			if (m_searcher.searching())
-				std::cerr << "still searching" << std::endl;
-			else m_searcher.newGame();
-		}
+        void UciHandler::handleUcinewgame() {
+            if (m_searcher.searching()) {
+                eprintln("still searching");
+                return;
+            }
 
-		auto UciHandler::handleIsready() -> void
-		{
-			m_searcher.ensureReady();
-			std::cout << "readyok" << std::endl;
-		}
+            m_searcher.newGame();
+        }
 
-		auto UciHandler::handlePosition(const std::vector<std::string> &tokens) -> void
-		{
-			if (m_searcher.searching())
-				std::cerr << "still searching" << std::endl;
-			else if (tokens.size() > 1)
-			{
-				const auto &position = tokens[1];
+        void UciHandler::handleIsready() {
+            m_searcher.ensureReady();
+            println("readyok");
+        }
 
-				usize next = 2;
+        void UciHandler::handlePosition(std::span<const std::string_view> args) {
+            if (m_searcher.searching()) {
+                eprintln("still searching");
+                return;
+            }
 
-				if (position == "startpos")
-					m_pos.resetToStarting();
-				else if (position == "fen")
-				{
-					std::ostringstream fen{};
+            if (args.empty()) {
+                return;
+            }
 
-					for (usize i = 0; i < 6 && next < tokens.size(); ++i, ++next)
-					{
-						fen << tokens[next] << ' ';
-					}
+            const auto type = args[0];
+            args = args.subspan<1>();
 
-					if (!m_pos.resetFromFen(fen.str()))
-						return;
-				}
-				else if (position == "frc")
-				{
-					if (!g_opts.chess960)
-					{
-						std::cerr << "Chess960 not enabled" << std::endl;
-						return;
-					}
+            usize next = 0;
 
-					if (next < tokens.size())
-					{
-						if (const auto frcIndex = util::tryParseU32(tokens[next++]);
-							frcIndex && !m_pos.resetFromFrcIndex(*frcIndex))
-							return;
-					}
-				}
-				else if (position == "dfrc")
-				{
-					if (!g_opts.chess960)
-					{
-						std::cerr << "Chess960 not enabled" << std::endl;
-						return;
-					}
+            if (type == "startpos") {
+                m_pos = Position::starting();
+                m_keyHistory.clear();
+            } else if (type == "fen") {
+                const auto count = std::distance(args.begin(), std::ranges::find(args, "moves"));
 
-					if (next < tokens.size())
-					{
-						if (const auto dfrcIndex = util::tryParseU32(tokens[next++]);
-							dfrcIndex && !m_pos.resetFromDfrcIndex(*dfrcIndex))
-							return;
-					}
-				}
-				else return;
+                if (count == 0) {
+                    eprintln("Missing fen");
+                    return;
+                }
 
-				if (next < tokens.size() && tokens[next++] == "moves")
-				{
-					for (; next < tokens.size(); ++next)
-					{
-						if (const auto move = m_pos.moveFromUci(tokens[next]))
-							m_pos.applyMoveUnchecked<false, false>(move, nullptr);
-					}
-				}
-			}
-		}
+                const auto parts = args.subspan(0, count);
+                const auto newPos = Position::fromFenParts(parts);
 
-		auto UciHandler::handleGo(const std::vector<std::string> &tokens, Instant startTime) -> void
-		{
-			if (m_searcher.searching())
-				std::cerr << "already searching" << std::endl;
-			else
-			{
-				u32 depth = MaxDepth;
-				auto limiter = std::make_unique<limit::CompoundLimiter>();
+                if (!newPos) {
+                    return;
+                }
 
-				MoveList movesToSearch{};
+                m_pos = *newPos;
+                m_keyHistory.clear();
 
-				bool infinite = false;
-				bool tournamentTime = false;
+                next += count;
+            } else {
+                eprintln("Invalid position type {}", type);
+                return;
+            }
 
-				i64 timeRemaining{};
-				i64 increment{};
-				i32 toGo{};
+            assert(next <= args.size());
 
-				for (usize i = 1; i < tokens.size(); ++i)
-				{
-					if (tokens[i] == "depth" && ++i < tokens.size())
-					{
-						if (!util::tryParseU32(depth, tokens[i]))
-							std::cerr << "invalid depth " << tokens[i] << std::endl;
-						continue;
-					}
+            if (next >= args.size() || args[next] != "moves") {
+                return;
+            }
 
-					if (tokens[i] == "infinite")
-					{
-						infinite = true;
-						continue;
-					}
+            for (usize i = next + 1; i < args.size(); ++i) {
+                if (const auto move = m_pos.moveFromUci(args[i])) {
+                    m_keyHistory.push_back(m_pos.key());
+                    m_pos = m_pos.applyMove(move);
+                } else {
+                    eprintln("Invalid move {}", args[i]);
+                    break;
+                }
+            }
+        }
 
-					if (tokens[i] == "nodes" && ++i < tokens.size())
-					{
-						usize nodes{};
-						if (!util::tryParseSize(nodes, tokens[i]))
-							std::cerr << "invalid node count " << tokens[i] << std::endl;
-						else limiter->addLimiter<limit::NodeLimiter>(nodes);
-					}
-					else if (tokens[i] == "movetime" && ++i < tokens.size())
-					{
-						i64 time{};
-						if (!util::tryParseI64(time, tokens[i]))
-							std::cerr << "invalid time " << tokens[i] << std::endl;
-						else
-						{
-							time = std::max<i64>(time, 1);
-							limiter->addLimiter<limit::MoveTimeLimiter>(time, m_moveOverhead);
-						}
-					}
-					else if ((tokens[i] == "btime" || tokens[i] == "wtime") && ++i < tokens.size()
-						&& tokens[i - 1] == (m_pos.toMove() == Color::Black ? "btime" : "wtime"))
-					{
-						tournamentTime = true;
+        void UciHandler::handleGo(std::span<const std::string_view> args, Instant startTime) {
+            if (m_searcher.searching()) {
+                eprintln("already searching");
+                return;
+            }
 
-						i64 time{};
-						if (!util::tryParseI64(time, tokens[i]))
-							std::cerr << "invalid time " << tokens[i] << std::endl;
-						else
-						{
-							time = std::max<i64>(time, 1);
-							timeRemaining = static_cast<i64>(time);
-						}
-					}
-					else if ((tokens[i] == "binc" || tokens[i] == "winc") && ++i < tokens.size()
-						&& tokens[i - 1] == (m_pos.toMove() == Color::Black ? "binc" : "winc"))
-					{
-						tournamentTime = true;
+            u32 depth = kMaxDepth;
+            auto limiter = std::make_unique<limit::CompoundLimiter>();
 
-						i64 time{};
-						if (!util::tryParseI64(time, tokens[i]))
-							std::cerr << "invalid time " << tokens[i] << std::endl;
-						else
-						{
-							time = std::max<i64>(time, 1);
-							increment = static_cast<i64>(time);
-						}
-					}
-					else if (tokens[i] == "movestogo" && ++i < tokens.size())
-					{
-						tournamentTime = true;
+            MoveList movesToSearch{};
 
-						u32 moves{};
-						if (!util::tryParseU32(moves, tokens[i]))
-							std::cerr << "invalid movestogo " << tokens[i] << std::endl;
-						else
-						{
-							moves = std::min<u32>(moves, static_cast<u32>(std::numeric_limits<i32>::max()));
-							toGo = static_cast<i32>(moves);
-						}
-					}
-					else if (tokens[i] == "searchmoves" && i + 1 < tokens.size())
-					{
-						while (i + 1 < tokens.size())
-						{
-							const auto &candidate = tokens[i + 1];
+            bool infinite = false;
+            bool tournamentTime = false;
 
-							if (candidate.length() >= 4 && candidate.length() <= 5
-								&& candidate[0] >= 'a' && candidate[0] <= 'h'
-								&& candidate[1] >= '1' && candidate[1] <= '8'
-								&& candidate[2] >= 'a' && candidate[2] <= 'h'
-								&& candidate[3] >= '1' && candidate[3] <= '8'
-								&& (candidate.length() < 5 || candidate[4] == 'q'))
-							{
-								const auto move = m_pos.moveFromUci(candidate);
+            i64 timeRemaining{};
+            i64 increment{};
+            i32 toGo{};
 
-								if (std::ranges::find(movesToSearch, move) == movesToSearch.end())
-								{
-									if (m_pos.isPseudolegal(move) && m_pos.isLegal(move))
-										movesToSearch.push(move);
-									else std::cout << "info string ignoring illegal move " << candidate << std::endl;
-								}
+            for (usize i = 0; i < args.size(); ++i) {
+                if (args[i] == "depth" && ++i < args.size()) {
+                    if (!util::tryParse<u32>(depth, args[i])) {
+                        eprintln("invalid depth {}", args[i]);
+                    }
+                    continue;
+                }
 
-								++i;
-							}
-							else break;
-						}
-					}
-				}
+                if (args[i] == "infinite") {
+                    infinite = true;
+                    continue;
+                }
 
-				if (!movesToSearch.empty())
-				{
-					std::cout << "info string searching moves:";
+                if (args[i] == "nodes" && ++i < args.size()) {
+                    usize nodes{};
+                    if (!util::tryParse<usize>(nodes, args[i])) {
+                        eprintln("invalid node count {}", args[i]);
+                    } else {
+                        limiter->addLimiter<limit::NodeLimiter>(nodes);
+                    }
+                } else if (args[i] == "movetime" && ++i < args.size()) {
+                    i64 time{};
+                    if (!util::tryParse<i64>(time, args[i])) {
+                        eprintln("invalid time {}", args[i]);
+                    } else {
+                        time = std::max<i64>(time, 1);
+                        limiter->addLimiter<limit::MoveTimeLimiter>(time, m_moveOverhead);
+                    }
+                } else if ((args[i] == "btime" || args[i] == "wtime") && ++i < args.size()
+                           && args[i - 1] == (m_pos.stm() == Color::kBlack ? "btime" : "wtime"))
+                {
+                    tournamentTime = true;
 
-					for (const auto move : movesToSearch)
-					{
-						std::cout << " " << moveToString(move);
-					}
+                    i64 time{};
+                    if (!util::tryParse<i64>(time, args[i])) {
+                        eprintln("invalid time {}", args[i]);
+                    } else {
+                        time = std::max<i64>(time, 1);
+                        timeRemaining = static_cast<i64>(time);
+                    }
+                } else if ((args[i] == "binc" || args[i] == "winc") && ++i < args.size()
+                           && args[i - 1] == (m_pos.stm() == Color::kBlack ? "binc" : "winc"))
+                {
+                    tournamentTime = true;
 
-					std::cout << std::endl;
-				}
+                    i64 time{};
+                    if (!util::tryParse<i64>(time, args[i])) {
+                        eprintln("invalid time {}", args[i]);
+                    } else {
+                        time = std::max<i64>(time, 1);
+                        increment = static_cast<i64>(time);
+                    }
+                } else if (args[i] == "movestogo" && ++i < args.size()) {
+                    tournamentTime = true;
 
-				if (depth == 0)
-					return;
-				else if (depth > MaxDepth)
-					depth = MaxDepth;
+                    u32 moves{};
+                    if (!util::tryParse<u32>(moves, args[i])) {
+                        eprintln("invalid movestogo {}", args[i]);
+                    } else {
+                        moves = std::min<u32>(moves, static_cast<u32>(std::numeric_limits<i32>::max()));
+                        toGo = static_cast<i32>(moves);
+                    }
+                } else if (args[i] == "searchmoves" && i + 1 < args.size()) {
+                    while (i + 1 < args.size()) {
+                        const auto& candidate = args[i + 1];
 
-				if (tournamentTime)
-				{
-					if (toGo != 0)
-					{
-						if (g_opts.enableWeirdTcs)
-							std::cout
-								<< "info string Warning: oranj does not officially"
-									" support cyclic (movestogo) time controls" << std::endl;
-						else
-						{
-							std::cout
-								<< "info string Cyclic (movestogo) time controls"
-								   " not enabled, see the EnableWeirdTCs option" << std::endl;
-							std::cout << "bestmove 0000" << std::endl;
-							return;
-						}
-					}
-					else if (increment == 0)
-					{
-						if (g_opts.enableWeirdTcs)
-							std::cout
-								<< "info string Warning: oranj does not officially"
-								   " support sudden death (0 increment) time controls" << std::endl;
-						else
-						{
-							std::cout
-								<< "info string Sudden death (0 increment) time controls"
-								   " not enabled, see the EnableWeirdTCs option" << std::endl;
-							std::cout << "bestmove 0000" << std::endl;
-							return;
-						}
-					}
-				}
+                        if (candidate.length() >= 4 && candidate.length() <= 5 && candidate[0] >= 'a'
+                            && candidate[0] <= 'h' && candidate[1] >= '1' && candidate[1] <= '8' && candidate[2] >= 'a'
+                            && candidate[2] <= 'h' && candidate[3] >= '1' && candidate[3] <= '8'
+                            && (candidate.length() < 5 || candidate[4] == 'q'))
+                        {
+                            const auto move = m_pos.moveFromUci(candidate);
 
-				if (tournamentTime && timeRemaining > 0)
-					limiter->addLimiter<limit::TimeManager>(startTime,
-						static_cast<f64>(timeRemaining) / 1000.0,
-						static_cast<f64>(increment) / 1000.0,
-						toGo, static_cast<f64>(m_moveOverhead) / 1000.0);
+                            if (std::ranges::find(movesToSearch, move) == movesToSearch.end()) {
+                                if (m_pos.isPseudolegal(move) && m_pos.isLegal(move)) {
+                                    movesToSearch.push(move);
+                                } else {
+                                    println("info string ignoring illegal move {}", candidate);
+                                }
+                            }
 
-				m_searcher.startSearch(m_pos, startTime,
-					static_cast<i32>(depth), movesToSearch, std::move(limiter), infinite);
-			}
-		}
+                            ++i;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
 
-		auto UciHandler::handleStop() -> void
-		{
-			if (!m_searcher.searching())
-				std::cerr << "not searching" << std::endl;
-			else m_searcher.stop();
-		}
+            if (!movesToSearch.empty()) {
+                print("info string searching moves:");
 
-		//TODO refactor
-		auto UciHandler::handleSetoption(const std::vector<std::string> &tokens) -> void
-		{
-			usize i = 1;
+                for (const auto move : movesToSearch) {
+                    println(" {}", move);
+                }
 
-			for (; i < tokens.size() - 1 && tokens[i] != "name"; ++i) {}
+                println();
+            }
 
-			if (++i == tokens.size())
-				return;
+            if (depth == 0) {
+                return;
+            }
 
-			bool nameEmpty = true;
-			std::ostringstream name{};
+            if (depth > kMaxDepth) {
+                depth = kMaxDepth;
+            }
 
-			for (; i < tokens.size() && tokens[i] != "value"; ++i)
-			{
-				if (!nameEmpty)
-					name << ' ';
-				else nameEmpty = false;
+            if (tournamentTime) {
+                if (toGo != 0) {
+                    if (g_opts.enableWeirdTcs) {
+                        println(
+                            "info string Warning: oranj does not officially support cyclic (movestogo) time controls"
+                        );
+                    } else {
+                        println(
+                            "info string Cyclic (movestogo) time controls not enabled, see the EnableWeirdTCs option"
+                        );
+                        println("bestmove 0000");
+                        return;
+                    }
+                } else if (increment == 0) {
+                    if (g_opts.enableWeirdTcs) {
+                        println(
+                            "info string Warning: oranj does not officially support sudden death (0 increment) time controls"
+                        );
+                    } else {
+                        println(
+                            "info string Sudden death (0 increment) time controls not enabled, see the EnableWeirdTCs option"
+                        );
+                        println("bestmove 0000");
+                        return;
+                    }
+                }
+            }
 
-				name << tokens[i];
-			}
+            if (tournamentTime && timeRemaining > 0) {
+                limiter->addLimiter<limit::TimeManager>(
+                    startTime,
+                    static_cast<f64>(timeRemaining) / 1000.0,
+                    static_cast<f64>(increment) / 1000.0,
+                    toGo,
+                    static_cast<f64>(m_moveOverhead) / 1000.0
+                );
+            }
 
-			if (++i == tokens.size())
-				return;
+            m_searcher.startSearch(
+                m_pos,
+                m_keyHistory,
+                startTime,
+                static_cast<i32>(depth),
+                movesToSearch,
+                std::move(limiter),
+                infinite
+            );
+        }
 
-			bool valueEmpty = true;
-			std::ostringstream value{};
+        void UciHandler::handleStop() {
+            if (!m_searcher.searching()) {
+                eprintln("not searching");
+                return;
+            }
 
-			for (; i < tokens.size(); ++i)
-			{
-				if (!valueEmpty)
-					value << ' ';
-				else valueEmpty = false;
+            m_searcher.stop();
+        }
 
-				value << tokens[i];
-			}
+        //TODO refactor
+        void UciHandler::handleSetoption(std::span<const std::string_view> args) {
+            if (m_searcher.searching()) {
+                eprintln("still searching");
+                return;
+            }
 
-			auto nameStr = name.str();
+            usize i = 0;
 
-			const auto valueStr = value.str();
+            for (; i < args.size() - 1 && args[i] != "name"; ++i) {
+                //
+            }
 
-			if (!nameEmpty)
-			{
-				std::transform(nameStr.begin(), nameStr.end(), nameStr.begin(),
-					[](auto c) { return std::tolower(c); });
+            if (++i == args.size()) {
+                return;
+            }
 
-				if (nameStr == "hash")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newTtSize = util::tryParseSize(valueStr))
-							m_searcher.setTtSize(TtSizeMibRange.clamp(*newTtSize));
-					}
-				}
-				else if (nameStr == "clear hash")
-				{
-					if (m_searcher.searching())
-						std::cerr << "still searching" << std::endl;
+            std::string name{};
+            auto nameItr = std::back_inserter(name);
 
-					m_searcher.newGame();
-				}
-				else if (nameStr == "threads")
-				{
-					if (m_searcher.searching())
-						std::cerr << "still searching" << std::endl;
+            for (; i < args.size() && args[i] != "value"; ++i) {
+                if (!name.empty()) {
+                    fmt::format_to(nameItr, " ");
+                }
 
-					if (!valueEmpty)
-					{
-						if (const auto newThreads = util::tryParseU32(valueStr))
-						{
-							opts::mutableOpts().threads = *newThreads;
-							m_searcher.setThreads(opts::ThreadCountRange.clamp(*newThreads));
-						}
-					}
-				}
-				else if (nameStr == "contempt")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newContempt = util::tryParseI32(valueStr))
-							opts::mutableOpts().contempt = wdl::unnormalizeScoreMaterial58(
-								ContemptRange.clamp(*newContempt));
-					}
-				}
-				else if (nameStr == "uci_chess960")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newChess960 = util::tryParseBool(valueStr))
-							opts::mutableOpts().chess960 = *newChess960;
-					}
-				}
-				else if (nameStr == "uci_showwdl")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newShowWdl = util::tryParseBool(valueStr))
-							opts::mutableOpts().showWdl = *newShowWdl;
-					}
-				}
-				else if (nameStr == "showcurrmove")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newShowCurrMove = util::tryParseBool(valueStr))
-							opts::mutableOpts().showCurrMove = *newShowCurrMove;
-					}
-				}
-				else if (nameStr == "move overhead")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newMoveOverhead = util::tryParseI32(valueStr))
-							m_moveOverhead = limit::MoveOverheadRange.clamp(*newMoveOverhead);
-					}
-				}
-				else if (nameStr == "softnodes")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newSoftNodes = util::tryParseBool(valueStr))
-							opts::mutableOpts().softNodes = *newSoftNodes;
-					}
-				}
-				else if (nameStr == "softnodehardlimitmultiplier")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newSoftNodeHardLimitMultiplier = util::tryParseI32(valueStr))
-							opts::mutableOpts().softNodeHardLimitMultiplier
-								= limit::SoftNodeHardLimitMultiplierRange.clamp(*newSoftNodeHardLimitMultiplier);
-					}
-				}
-				else if (nameStr == "enableweirdtcs")
-				{
-					if (!valueEmpty)
-					{
-						if (const auto newEnableWeirdTcs = util::tryParseBool(valueStr))
-							opts::mutableOpts().enableWeirdTcs = *newEnableWeirdTcs;
-					}
-				}
-				else if (nameStr == "evalfile")
-				{
-					if (m_searcher.searching())
-						std::cerr << "still searching" << std::endl;
+                fmt::format_to(nameItr, "{}", args[i]);
+            }
 
-					if (!valueEmpty)
-					{
-						if (valueStr == "<internal>")
-						{
-							eval::loadDefaultNetwork();
-							std::cout << "info string loaded embedded network "
-								<< eval::defaultNetworkName() << std::endl;
-						}
-						else eval::loadNetwork(valueStr);
-					}
-				}
+            if (++i == args.size()) {
+                return;
+            }
+
+            std::string value{};
+            auto valueItr = std::back_inserter(value);
+
+            for (; i < args.size(); ++i) {
+                if (!value.empty()) {
+                    fmt::format_to(valueItr, " ");
+                }
+
+                fmt::format_to(valueItr, "{}", args[i]);
+            }
+
+            if (!name.empty()) {
+                std::transform(name.begin(), name.end(), name.begin(), [](auto c) { return std::tolower(c); });
+
+                if (name == "hash") {
+                    if (!value.empty()) {
+                        if (const auto newTtSize = util::tryParse<usize>(value)) {
+                            m_searcher.setTtSize(kTtSizeMibRange.clamp(*newTtSize));
+                        }
+                    }
+                } else if (name == "clear hash") {
+                    if (m_searcher.searching()) {
+                        eprintln("still searching");
+                    }
+
+                    m_searcher.newGame();
+                } else if (name == "threads") {
+                    if (!value.empty()) {
+                        if (const auto newThreads = util::tryParse<u32>(value)) {
+                            opts::mutableOpts().threads = *newThreads;
+                            m_searcher.setThreads(opts::kThreadCountRange.clamp(*newThreads));
+                        }
+                    }
+                } else if (name == "multipv") {
+                    if (!value.empty()) {
+                        if (const auto newMultiPv = util::tryParse<i32>(value)) {
+                            opts::mutableOpts().multiPv = opts::kMultiPvRange.clamp(*newMultiPv);
+                        }
+                    }
+                } else if (name == "contempt") {
+                    if (!value.empty()) {
+                        if (const auto newContempt = util::tryParse<i32>(value)) {
+                            opts::mutableOpts().contempt =
+                                wdl::unnormalizeScoreMaterial58(kContemptRange.clamp(*newContempt));
+                        }
+                    }
+                } else if (name == "uci_showwdl") {
+                    if (!value.empty()) {
+                        if (const auto newShowWdl = util::tryParseBool(value)) {
+                            opts::mutableOpts().showWdl = *newShowWdl;
+                        }
+                    }
+                } else if (name == "showcurrmove") {
+                    if (!value.empty()) {
+                        if (const auto newShowCurrMove = util::tryParseBool(value)) {
+                            opts::mutableOpts().showCurrMove = *newShowCurrMove;
+                        }
+                    }
+                } else if (name == "move overhead") {
+                    if (!value.empty()) {
+                        if (const auto newMoveOverhead = util::tryParse<i32>(value)) {
+                            m_moveOverhead = limit::kMoveOverheadRange.clamp(*newMoveOverhead);
+                        }
+                    }
+                } else if (name == "softnodes") {
+                    if (!value.empty()) {
+                        if (const auto newSoftNodes = util::tryParseBool(value)) {
+                            opts::mutableOpts().softNodes = *newSoftNodes;
+                        }
+                    }
+                } else if (name == "softnodehardlimitmultiplier") {
+                    if (!value.empty()) {
+                        if (const auto newSoftNodeHardLimitMultiplier = util::tryParse<i32>(value)) {
+                            opts::mutableOpts().softNodeHardLimitMultiplier =
+                                limit::kSoftNodeHardLimitMultiplierRange.clamp(*newSoftNodeHardLimitMultiplier);
+                        }
+                    }
+                } else if (name == "enableweirdtcs") {
+                    if (!value.empty()) {
+                        if (const auto newEnableWeirdTcs = util::tryParseBool(value)) {
+                            opts::mutableOpts().enableWeirdTcs = *newEnableWeirdTcs;
+                        }
+                    }
+                } else if (name == "evalfile") {
+                    if (!value.empty()) {
+                        if (value == "<internal>") {
+                            eval::loadDefaultNetwork();
+                            println("info string loaded embedded network {}", eval::defaultNetworkName());
+                        } else {
+                            eval::loadNetwork(value);
+                        }
+                    }
+                }
 #if OJ_EXTERNAL_TUNE
-				else if (auto *param = lookupTunableParam(nameStr))
-				{
-					if (!valueEmpty
-						&& util::tryParseI32(param->value, valueStr)
-						&& param->callback)
-						param->callback();
-				}
+                else if (auto* param = lookupTunableParam(name))
+                {
+                    if (!value.empty() && util::tryParse<i32>(param->value, value) && param->callback) {
+                        param->callback();
+                    }
+                }
 #endif
-			}
-		}
+            }
+        }
 
-		auto UciHandler::handleD() -> void
-		{
-			std::cout << '\n';
+        void UciHandler::handleD() {
+            println();
+            println("{}", m_pos);
 
-			printBoard(std::cout, m_pos);
-			std::cout << "\nFen: " << m_pos.toFen() << std::endl;
+            println();
+            println("Fen: {}", m_pos.toFen());
 
-			std::ostringstream key{};
-			key << std::hex << std::setw(16) << std::setfill('0') << m_pos.key();
-			std::cout << "Key: " << key.str() << std::endl;
+            println("Key: {:016x}", m_pos.key());
+            println("Pawn key: {:016x}", m_pos.pawnKey());
 
-			std::ostringstream pawnKey{};
-			pawnKey << std::hex << std::setw(16) << std::setfill('0') << m_pos.pawnKey();
-			std::cout << "Pawn key: " << pawnKey.str() << std::endl;
+            print("Checkers:");
 
-			std::cout << "Checkers:";
+            auto checkers = m_pos.checkers();
+            while (checkers) {
+                print(" {}", checkers.popLowestSquare());
+            }
 
-			auto checkers = m_pos.checkers();
-			while (checkers)
-			{
-				std::cout << ' ' << squareToString(checkers.popLowestSquare());
-			}
+            println();
 
-			std::cout << std::endl;
+            print("Pinned:");
 
-			std::cout << "Pinned:";
+            auto pinned = m_pos.pinned(m_pos.stm());
+            while (pinned) {
+                print(" {}", pinned.popLowestSquare());
+            }
 
-			auto pinned = m_pos.pinned();
-			while (pinned)
-			{
-				std::cout << ' ' << squareToString(pinned.popLowestSquare());
-			}
+            println();
 
-			std::cout << std::endl;
+            const auto staticEval = eval::adjustEval<false>(m_pos, {}, 0, nullptr, eval::staticEvalOnce(m_pos));
+            const auto normalized = wdl::normalizeScore(staticEval, m_pos.classicalMaterial());
+            const auto whitePerspective = m_pos.stm() == Color::kBlack ? -normalized : normalized;
 
-			const auto staticEval = eval::adjustEval<false>(m_pos, {}, 0, nullptr, eval::staticEvalOnce(m_pos));
-			const auto normalized = wdl::normalizeScore(staticEval, m_pos.classicalMaterial());
+            println("Static eval: {:+}.{:02}", whitePerspective / 100, std::abs(whitePerspective) % 100);
+        }
 
-			std::cout << "Static eval: ";
-			printScore(std::cout, m_pos.toMove() == Color::Black ? -normalized : normalized);
-			std::cout << std::endl;
-		}
+        void UciHandler::handleFen() {
+            println("{}", m_pos.toFen());
+        }
 
-		auto UciHandler::handleEval() -> void
-		{
-			const auto staticEval = eval::adjustEval<false>(m_pos, {}, 0, nullptr, eval::staticEvalOnce(m_pos));
-			const auto normalized = wdl::normalizeScore(staticEval, m_pos.classicalMaterial());
+        void UciHandler::handleEval() {
+            const auto staticEval = eval::adjustEval<false>(m_pos, {}, 0, nullptr, eval::staticEvalOnce(m_pos));
+            const auto normalized = wdl::normalizeScore(staticEval, m_pos.classicalMaterial());
 
-			printScore(std::cout, normalized);
-			std::cout << std::endl;
-		}
+            println("Static eval: {:+}.{:02}", normalized / 100, std::abs(normalized) % 100);
+        }
 
-		auto UciHandler::handleRawEval() -> void
-		{
-			const auto score = eval::staticEvalOnce<false>(m_pos);
-			std::cout << score << std::endl;
-		}
+        void UciHandler::handleRawEval() {
+            const auto score = eval::staticEvalOnce<false>(m_pos);
+            println("{}", score);
+        }
 
-		auto UciHandler::handleCheckers() -> void
-		{
-			std::cout << '\n';
-			printBitboard(std::cout, m_pos.checkers());
-		}
+        void UciHandler::handleCheckers() {
+            println("{}", m_pos.checkers());
+        }
 
-		auto UciHandler::handleThreats() -> void
-		{
-			std::cout << '\n';
-			printBitboard(std::cout, m_pos.threats());
-		}
+        void UciHandler::handleThreats() {
+            println("{}", m_pos.threats());
+        }
 
-		auto UciHandler::handleRegen() -> void
-		{
-			m_pos.regen();
-		}
+        void UciHandler::handleRegen() {
+            m_pos.regen();
+        }
 
-		auto UciHandler::handleMoves() -> void
-		{
-			ScoredMoveList moves{};
-			generateAll(moves, m_pos);
+        void UciHandler::handleMoves() {
+            ScoredMoveList moves{};
+            generateAll(moves, m_pos);
 
-			for (u32 i = 0; i < moves.size(); ++i)
-			{
-				if (i > 0)
-					std::cout << ' ';
-				std::cout << moveToString(moves[i].move);
-			}
+            for (u32 i = 0; i < moves.size(); ++i) {
+                if (i > 0) {
+                    print(" {}", moves[i].move);
+                } else {
+                    print("{}", moves[i].move);
+                }
+            }
 
-			std::cout << std::endl;
-		}
+            println();
+        }
 
-		auto UciHandler::handlePerft(const std::vector<std::string> &tokens) -> void
-		{
-			u32 depth = 6;
+        void UciHandler::handlePerft(std::span<const std::string_view> args) {
+            u32 depth = 6;
 
-			if (tokens.size() > 1)
-			{
-				if (!util::tryParseU32(depth, tokens[1]))
-				{
-					std::cerr << "invalid depth " << tokens[1] << std::endl;
-					return;
-				}
-			}
+            if (!args.empty()) {
+                if (!util::tryParse(depth, args[0])) {
+                    eprintln("invalid depth {}", args[0]);
+                    return;
+                }
+            }
 
-			perft(m_pos, static_cast<i32>(depth));
-		}
+            perft(m_pos, static_cast<i32>(depth));
+        }
 
-		auto UciHandler::handleSplitperft(const std::vector<std::string> &tokens) -> void
-		{
-			u32 depth = 6;
+        void UciHandler::handleSplitperft(std::span<const std::string_view> args) {
+            u32 depth = 6;
 
-			if (tokens.size() > 1)
-			{
-				if (!util::tryParseU32(depth, tokens[1]))
-				{
-					std::cerr << "invalid depth " << tokens[1] << std::endl;
-					return;
-				}
-			}
+            if (!args.empty()) {
+                if (!util::tryParse(depth, args[0])) {
+                    eprintln("invalid depth {}", args[0]);
+                    return;
+                }
+            }
 
-			splitPerft(m_pos, static_cast<i32>(depth));
-		}
+            splitPerft(m_pos, static_cast<i32>(depth));
+        }
 
-		auto UciHandler::handleBench(const std::vector<std::string> &tokens) -> void
-		{
-			if (m_searcher.searching())
-			{
-				std::cerr << "already searching" << std::endl;
-				return;
-			}
+        void UciHandler::handleBench(std::span<const std::string_view> args) {
+            if (m_searcher.searching()) {
+                eprintln("already searching");
+                return;
+            }
 
-			i32 depth = bench::DefaultBenchDepth;
-			usize ttSize = bench::DefaultBenchTtSize;
+            i32 depth = bench::kDefaultBenchDepth;
+            usize ttSize = bench::kDefaultBenchTtSize;
 
-			if (tokens.size() > 1)
-			{
-				if (const auto newDepth = util::tryParseU32(tokens[1]))
-					depth = static_cast<i32>(*newDepth);
-				else
-				{
-					std::cout << "info string invalid depth " << tokens[1] << std::endl;
-					return;
-				}
-			}
+            if (args.size() > 0) {
+                if (const auto newDepth = util::tryParse<u32>(args[0])) {
+                    depth = static_cast<i32>(*newDepth);
+                } else {
+                    println("info string invalid depth {}", args[0]);
+                    return;
+                }
+            }
 
-			if (tokens.size() > 2)
-			{
-				if (const auto newThreads = util::tryParseU32(tokens[2]))
-				{
-					if (*newThreads > 1)
-						std::cout << "info string multiple search threads not yet supported, using 1" << std::endl;
-				}
-				else
-				{
-					std::cout << "info string invalid thread count " << tokens[2] << std::endl;
-					return;
-				}
-			}
+            if (args.size() > 1) {
+                if (const auto newThreads = util::tryParse<u32>(args[1])) {
+                    if (*newThreads > 1) {
+                        println("info string multiple search threads not yet supported, using 1");
+                    }
+                } else {
+                    println("info string invalid thread count {}", args[1]);
+                    return;
+                }
+            }
 
-			if (tokens.size() > 3)
-			{
-				if (const auto newTtSize = util::tryParseSize(tokens[3]))
-					ttSize = static_cast<i32>(*newTtSize);
-				else
-				{
-					std::cout << "info string invalid tt size " << tokens[3] << std::endl;
-					return;
-				}
-			}
+            if (args.size() > 2) {
+                if (const auto newTtSize = util::tryParse<usize>(args[2])) {
+                    ttSize = static_cast<i32>(*newTtSize);
+                } else {
+                    println("info string invalid tt size {}", args[2]);
+                    return;
+                }
+            }
 
-			m_searcher.setTtSize(ttSize);
-			std::cout << "info string set tt size to " << ttSize << " MB" << std::endl;
+            m_searcher.setTtSize(ttSize);
+            println("info string set tt size to {} MiB", ttSize);
 
-			if (depth == 0)
-				depth = 1;
+            if (depth == 0) {
+                depth = 1;
+            }
 
-			bench::run(m_searcher, depth);
-		}
-	}
+            bench::run(m_searcher, depth);
+        }
+
+        void UciHandler::handleWait() {
+            m_searcher.waitForStop();
+        }
+    } // namespace
 
 #if OJ_EXTERNAL_TUNE
-	namespace tunable
-	{
-		auto addTunableParam(const std::string &name, i32 value,
-			i32 min, i32 max, f64 step, std::function<void()> callback) -> TunableParam &
-		{
-			auto &params = tunableParams();
+    namespace tunable {
+        TunableParam& addTunableParam(
+            std::string_view name,
+            i32 value,
+            i32 min,
+            i32 max,
+            f64 step,
+            std::function<void()> callback
+        ) {
+            auto& params = tunableParams();
 
-			if (params.size() == params.capacity())
-			{
-				std::cerr << "Tunable vector full, cannot reallocate" << std::endl;
-				std::terminate();
-			}
+            if (params.size() == params.capacity()) {
+                eprintln("Tunable vector full, cannot reallocate");
+                std::terminate();
+            }
 
-			auto lowerName = name;
-			std::transform(lowerName.begin(), lowerName.end(),
-				lowerName.begin(), [](auto c) { return std::tolower(c); });
+            std::string strName{name};
 
-			return params.emplace_back(TunableParam{name,
-				std::move(lowerName), value, value, {min, max}, step, std::move(callback)});
-		}
-	}
+            auto lowerName = strName;
+            std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), [](auto c) {
+                return std::tolower(c);
+            });
+
+            return params.emplace_back(TunableParam{
+                std::move(strName),
+                std::move(lowerName),
+                value,
+                value,
+                {min, max},
+                step,
+                std::move(callback)
+            });
+        }
+    } // namespace tunable
 #endif
 
-	namespace uci
-	{
-		auto run() -> i32
-		{
-			UciHandler handler{};
-			return handler.run();
-		}
-
-		auto moveToString(Move move) -> std::string
-		{
-			if (!move)
-				return "0000";
-
-			std::ostringstream str{};
-
-			str << squareToString(move.src());
-			str << squareToString(move.dst());
-
-			if (move.isPromo())
-				str << 'q';
-
-			return str.str();
-		}
+    namespace uci {
+        i32 run() {
+            UciHandler handler{};
+            return handler.run();
+        }
 
 #if OJ_EXTERNAL_TUNE
-		namespace
-		{
-			auto printParams(std::span<const std::string> params,
-				const std::function<void(const tunable::TunableParam &)> &printParam)
-			{
-				if (std::ranges::find(params, "<all>") != params.end())
-				{
-					for (const auto &param : tunableParams())
-					{
-						printParam(param);
-					}
+        namespace {
+            void printParams(
+                std::span<const std::string_view> params,
+                const std::function<void(const tunable::TunableParam&)>& printParam
+            ) {
+                if (std::ranges::find(params, "<all>") != params.end()) {
+                    for (const auto& param : tunableParams()) {
+                        printParam(param);
+                    }
 
-					return;
-				}
+                    return;
+                }
 
-				for (auto paramName : params)
-				{
-					std::transform(paramName.begin(), paramName.end(), paramName.begin(),
-						[](auto c) { return std::tolower(c); });
+                for (const auto paramName : params) {
+                    std::string lowerName{paramName};
+                    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), [](auto c) {
+                        return std::tolower(c);
+                    });
 
-					if (const auto *param = lookupTunableParam(paramName))
-						printParam(*param);
-					else
-					{
-						std::cerr << "unknown parameter " << paramName << std::endl;
-						return;
-					}
-				}
-			}
-		}
+                    if (const auto* param = lookupTunableParam(paramName)) {
+                        printParam(*param);
+                    } else {
+                        eprintln("unknown parameter {}", paramName);
+                        return;
+                    }
+                }
+            }
+        } // namespace
 
-		auto printWfTuningParams(std::span<const std::string> params) -> void
-		{
-			std::cout << "{\n";
+        void printWfTuningParams(std::span<const std::string_view> params) {
+            println("{{");
 
-			bool first = true;
-			const auto printParam = [&first](const auto &param)
-			{
-				if (!first)
-					std::cout << ",\n";
+            bool first = true;
+            const auto printParam = [&first](const auto& param) {
+                if (!first) {
+                    println(",");
+                }
 
-				std::cout << "  \"" << param.name << "\": {\n";
-				std::cout << "    \"value\": " << param.value << ",\n";
-				std::cout << "    \"min_value\": " << param.range.min() << ",\n";
-				std::cout << "    \"max_value\": " << param.range.max() << ",\n";
-				std::cout << "    \"step\": " << param.step << "\n";
-				std::cout << "  }";
+                println("  \"{}\": {{", param.name);
+                println("    \"value\": {},", param.value);
+                println("    \"min_value\": {},", param.range.min());
+                println("    \"max_value\": {},", param.range.max());
+                println("    \"step\": {}", param.step);
+                println("  }}");
 
-				first = false;
-			};
+                first = false;
+            };
 
-			printParams(params, printParam);
+            printParams(params, printParam);
 
-			std::cout << "\n}" << std::endl;
-		}
+            println();
+            println("}}");
+        }
 
-		auto printCttTuningParams(std::span<const std::string> params) -> void
-		{
-			bool first = true;
-			const auto printParam = [&first](const auto &param)
-			{
-				if (!first)
-					std::cout << ",\n";
+        void printCttTuningParams(std::span<const std::string_view> params) {
+            bool first = true;
+            const auto printParam = [&first](const auto& param) {
+                if (!first) {
+                    println(",");
+                }
 
-				std::cout << "\""
-					<< param.name << "\": \"Integer("
-					<< param.range.min() << ", "
-					<< param.range.max() << ")\"";
+                println("\"{}\": \"Integer({}, {})\"", param.name, param.range.min(), param.range.max());
 
-				first = false;
-			};
+                first = false;
+            };
 
-			printParams(params, printParam);
+            printParams(params, printParam);
 
-			std::cout << std::endl;
-		}
+            println();
+        }
 
-		auto printObTuningParams(std::span<const std::string> params) -> void
-		{
-			const auto printParam = [](const auto &param)
-			{
-				std::cout << param.name << ", int, "
-					<< param.value << ".0, "
-					<< param.range.min() << ".0, "
-					<< param.range.max() << ".0, "
-					<< param.step << ", 0.002"
-					<< std::endl;
-			};
+        void printObTuningParams(std::span<const std::string_view> params) {
+            const auto printParam = [](const auto& param) {
+                println(
+                    "{}, int, {}.0, {}.0, {}.0, {}, 0.002",
+                    param.name,
+                    param.value,
+                    param.range.min(),
+                    param.range.max(),
+                    param.step
+                );
+            };
 
-			printParams(params, printParam);
-		}
+            printParams(params, printParam);
+        }
 #endif // OJ_EXTERNAL_TUNE
-	}
-}
+    } // namespace uci
+} // namespace oranj

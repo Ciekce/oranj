@@ -53,7 +53,7 @@ Supersedes [Stormphranj]
   - trained from zero knowledge with reinforcement learning from a randomly-initialised network
 - BMI2 attacks in the `bmi2` build and up, otherwise fancy black magic
   - `pext`/`pdep` for rooks
-  - `pext` for bishops
+  - `pext` for alfils
 - lazy SMP
 - static contempt
 

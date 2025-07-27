@@ -20,24 +20,21 @@
 
 #include "types.h"
 
-#include <string>
 #include <span>
+#include <string_view>
 
 #include "core.h"
 #include "move.h"
 #include "tunable.h"
 
-namespace oranj::uci
-{
-	constexpr auto ContemptRange = util::Range<i32>{-1000, 1000};
+namespace oranj::uci {
+    constexpr auto kContemptRange = util::Range<i32>{-1000, 1000};
 
-	auto run() -> i32;
-
-	[[nodiscard]] auto moveToString(Move move) -> std::string;
+    i32 run();
 
 #if OJ_EXTERNAL_TUNE
-	auto printWfTuningParams(std::span<const std::string> params) -> void;
-	auto printCttTuningParams(std::span<const std::string> params) -> void;
-	auto printObTuningParams(std::span<const std::string> params) -> void;
+    void printWfTuningParams(std::span<const std::string_view> params);
+    void printCttTuningParams(std::span<const std::string_view> params);
+    void printObTuningParams(std::span<const std::string_view> params);
 #endif
-}
+} // namespace oranj::uci

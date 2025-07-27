@@ -25,54 +25,47 @@
 #include "core.h"
 #include "util/rng.h"
 
-namespace oranj::keys
-{
-	namespace sizes
-	{
-		constexpr usize PieceSquares = 12 * 64;
-		constexpr usize Color = 1;
+namespace oranj::keys {
+    namespace sizes {
+        constexpr usize kPieceSquares = 12 * 64;
+        constexpr usize kColor = 1;
 
-		constexpr auto Total = PieceSquares + Color;
-	}
+        constexpr auto kTotal = kPieceSquares + kColor;
+    } // namespace sizes
 
-	namespace offsets
-	{
-		constexpr usize PieceSquares = 0;
-		constexpr auto Color = PieceSquares + sizes::PieceSquares;
-	}
+    namespace offsets {
+        constexpr usize kPieceSquares = 0;
+        constexpr auto kColor = kPieceSquares + sizes::kPieceSquares;
+    } // namespace offsets
 
-	constexpr auto Keys = []
-	{
-		constexpr auto Seed = U64(0xD06C659954EC904A);
+    constexpr auto kKeys = [] {
+        constexpr auto kSeed = U64(0xD06C659954EC904A);
 
-		std::array<u64, sizes::Total> keys{};
+        std::array<u64, sizes::kTotal> keys{};
 
-		util::rng::Jsf64Rng rng{Seed};
+        util::rng::Jsf64Rng rng{kSeed};
 
-		for (auto &key : keys)
-		{
-			key = rng.nextU64();
-		}
+        for (auto& key : keys) {
+            key = rng.nextU64();
+        }
 
-		return keys;
-	}();
+        return keys;
+    }();
 
-	inline auto pieceSquare(Piece piece, Square square) -> u64
-	{
-		if (piece == Piece::None || square == Square::None)
-			return 0;
+    inline u64 pieceSquare(Piece piece, Square square) {
+        if (piece == Piece::kNone || square == Square::kNone) {
+            return 0;
+        }
 
-		return Keys[offsets::PieceSquares + static_cast<usize>(square) * 12 + static_cast<usize>(piece)];
-	}
+        return kKeys[offsets::kPieceSquares + static_cast<usize>(square) * 12 + static_cast<usize>(piece)];
+    }
 
-	// for flipping
-	inline auto color()
-	{
-		return Keys[offsets::Color];
-	}
+    // for flipping
+    inline u64 color() {
+        return kKeys[offsets::kColor];
+    }
 
-	inline auto color(Color c)
-	{
-		return c == Color::White ? 0 : color();
-	}
-}
+    inline u64 color(Color c) {
+        return c == Color::kWhite ? 0 : color();
+    }
+} // namespace oranj::keys

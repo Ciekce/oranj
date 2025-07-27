@@ -19,48 +19,38 @@
 #include "../attacks.h"
 
 #if !OJ_HAS_BMI2
-namespace oranj::attacks
-{
-	using namespace black_magic;
+namespace oranj::attacks {
+    using namespace black_magic;
 
-	namespace
-	{
-		auto generateRookAttacks()
-		{
-			std::array<Bitboard, RookData.tableSize> dst{};
+    namespace {
+        std::array<Bitboard, kRookData.tableSize> generateRookAttacks() {
+            std::array<Bitboard, kRookData.tableSize> dst{};
 
-			for (u32 square = 0; square < 64; ++square)
-			{
-				const auto &data = RookData.data[square];
+            for (u32 square = 0; square < 64; ++square) {
+                const auto& data = kRookData.data[square];
 
-				const auto invMask = ~data.mask;
-				const auto maxEntries = 1 << invMask.popcount();
+                const auto invMask = ~data.mask;
+                const auto maxEntries = 1 << invMask.popcount();
 
-				for (u32 i = 0; i < maxEntries; ++i)
-				{
-					const auto occupancy = util::pdep(i, invMask);
-					const auto idx = getRookIdx(occupancy, static_cast<Square>(square));
+                for (u32 i = 0; i < maxEntries; ++i) {
+                    const auto occupancy = util::pdep(i, invMask);
+                    const auto idx = getRookIdx(occupancy, static_cast<Square>(square));
 
-					if (!dst[data.offset + idx].empty())
-						continue;
+                    if (!dst[data.offset + idx].empty()) {
+                        continue;
+                    }
 
-					for (const auto dir : {
-						offsets::Up,
-						offsets::Down,
-						offsets::Left,
-						offsets::Right
-					})
-					{
-						dst[data.offset + idx]
-							|= internal::generateSlidingAttacks(static_cast<Square>(square), dir, occupancy);
-					}
-				}
-			}
+                    for (const auto dir : {offsets::kUp, offsets::kDown, offsets::kLeft, offsets::kRight}) {
+                        dst[data.offset + idx] |=
+                            internal::generateSlidingAttacks(static_cast<Square>(square), dir, occupancy);
+                    }
+                }
+            }
 
-			return dst;
-		}
-	}
+            return dst;
+        }
+    } // namespace
 
-	const std::array<Bitboard, RookData.tableSize> RookAttacks = generateRookAttacks();
-}
+    const std::array<Bitboard, kRookData.tableSize> g_rookAttacks = generateRookAttacks();
+} // namespace oranj::attacks
 #endif // !OJ_HAS_BMI2

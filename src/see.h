@@ -22,137 +22,116 @@
 
 #include <array>
 
+#include "attacks/attacks.h"
 #include "core.h"
 #include "position/position.h"
-#include "attacks/attacks.h"
+#include "rays.h"
+#include "tunable.h"
 
-namespace oranj::see
-{
-	namespace values
-	{
-		constexpr Score Pawn = 100;
-		constexpr Score Alfil = 125;
-		constexpr Score Ferz = 160;
-		constexpr Score Knight = 330;
-		constexpr Score Rook = 500;
-		constexpr Score King = 0;
-	}
+namespace oranj::see {
+    constexpr i32 value(Piece piece) {
+        return tunable::g_seeValues[static_cast<i32>(piece)];
+    }
 
-	constexpr auto Values = std::array {
-		values::Pawn,
-		values::Pawn,
-		values::Alfil,
-		values::Alfil,
-		values::Ferz,
-		values::Ferz,
-		values::Knight,
-		values::Knight,
-		values::Rook,
-		values::Rook,
-		values::King,
-		values::King,
-		static_cast<Score>(0)
-	};
+    constexpr i32 value(PieceType piece) {
+        return tunable::g_seeValues[static_cast<i32>(piece) * 2];
+    }
 
-	constexpr auto value(Piece piece)
-	{
-		return Values[static_cast<i32>(piece)];
-	}
+    inline i32 gain(const PositionBoards& boards, Move move) {
+        auto score = value(boards.pieceOn(move.toSq()));
 
-	constexpr auto value(PieceType piece)
-	{
-		return Values[static_cast<i32>(piece) * 2];
-	}
+        if (move.isPromo()) {
+            score += value(PieceType::kFerz) - value(PieceType::kPawn);
+        }
 
-	inline auto gain(const PositionBoards &boards, Move move)
-	{
-		auto score = value(boards.pieceAt(move.dst()));
+        return score;
+    }
 
-		if (move.isPromo())
-			score += values::Ferz - values::Pawn;
+    [[nodiscard]] inline PieceType popLeastValuable(
+        const BitboardSet& bbs,
+        Bitboard& occ,
+        Bitboard attackers,
+        Color color
+    ) {
+        for (i32 i = 0; i < 6; ++i) {
+            const auto piece = static_cast<PieceType>(i);
+            auto board = attackers & bbs.forPiece(piece, color);
 
-		return score;
-	}
+            if (!board.empty()) {
+                occ ^= board.lowestBit();
+                return piece;
+            }
+        }
 
-	[[nodiscard]] inline auto popLeastValuable(const BitboardSet &bbs,
-		Bitboard &occ, Bitboard attackers, Color color)
-	{
-		for (i32 i = 0; i < 6; ++i)
-		{
-			const auto piece = static_cast<PieceType>(i);
-			auto board = attackers & bbs.forPiece(piece, color);
+        return PieceType::kNone;
+    }
 
-			if (!board.empty())
-			{
-				occ ^= board.lowestBit();
-				return piece;
-			}
-		}
+    // basically ported from ethereal and weiss (their implementation is the same)
+    inline bool see(const Position& pos, Move move, Score threshold) {
+        const auto& boards = pos.boards();
+        const auto& bbs = boards.bbs();
 
-		return PieceType::None;
-	}
+        const auto color = pos.stm();
 
-	// basically ported from ethereal and weiss (their implementation is the same)
-	inline auto see(const Position &pos, Move move, Score threshold)
-	{
-		const auto &boards = pos.boards();
-		const auto &bbs = boards.bbs();
+        auto score = gain(boards, move) - threshold;
 
-		const auto color = pos.toMove();
+        if (score < 0) {
+            return false;
+        }
 
-		auto score = gain(boards, move) - threshold;
+        auto next = move.isPromo() ? PieceType::kFerz : pieceType(boards.pieceOn(move.fromSq()));
 
-		if (score < 0)
-			return false;
+        score -= value(next);
 
-		auto next = move.isPromo()
-			? PieceType::Ferz
-			: pieceType(boards.pieceAt(move.src()));
+        if (score >= 0) {
+            return true;
+        }
 
-		score -= value(next);
+        const auto square = move.toSq();
 
-		if (score >= 0)
-			return true;
+        auto occupancy = bbs.occupancy() ^ squareBit(move.fromSq()) ^ squareBit(square);
 
-		const auto square = move.dst();
+        const auto rooks = bbs.rooks();
 
-		auto occupancy = bbs.occupancy()
-			^ squareBit(move.src())
-			^ squareBit(square);
+        const auto blackPinned = pos.pinned(Color::kBlack);
+        const auto whitePinned = pos.pinned(Color::kWhite);
 
-		const auto rooks = bbs.rooks();
+        const auto blackKingRay = orthoRayIntersecting(pos.blackKing(), square);
+        const auto whiteKingRay = orthoRayIntersecting(pos.whiteKing(), square);
 
-		auto attackers = pos.allAttackersTo(square, occupancy);
+        const auto allowed = ~(blackPinned | whitePinned) | (blackPinned & blackKingRay) | (whitePinned & whiteKingRay);
 
-		auto us = oppColor(color);
+        auto attackers = pos.allAttackersTo(square, occupancy) & allowed;
 
-		while (true)
-		{
-			const auto ourAttackers = attackers & bbs.forColor(us);
+        auto us = oppColor(color);
 
-			if (ourAttackers.empty())
-				break;
+        while (true) {
+            const auto ourAttackers = attackers & bbs.forColor(us);
 
-			next = popLeastValuable(bbs, occupancy, ourAttackers, us);
+            if (ourAttackers.empty()) {
+                break;
+            }
 
-			if (next == PieceType::Rook)
-				attackers |= attacks::getRookAttacks(square, occupancy) & rooks;
+            next = popLeastValuable(bbs, occupancy, ourAttackers, us);
 
-			attackers &= occupancy;
+            if (next == PieceType::kRook) {
+                attackers |= attacks::getRookAttacks(square, occupancy) & rooks;
+            }
 
-			score = -score - 1 - value(next);
-			us = oppColor(us);
+            attackers &= occupancy;
 
-			if (score >= 0)
-			{
-				// our only attacker is our king, but the opponent still has defenders
-				if (next == PieceType::King
-					&& !(attackers & bbs.forColor(us)).empty())
-					us = oppColor(us);
-				break;
-			}
-		}
+            score = -score - 1 - value(next);
+            us = oppColor(us);
 
-		return color != us;
-	}
-}
+            if (score >= 0) {
+                // our only attacker is our king, but the opponent still has defenders
+                if (next == PieceType::kKing && !(attackers & bbs.forColor(us)).empty()) {
+                    us = oppColor(us);
+                }
+                break;
+            }
+        }
+
+        return color != us;
+    }
+} // namespace oranj::see

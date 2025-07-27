@@ -20,17 +20,10 @@
 
 #include "types.h"
 
-#include <iostream>
+namespace oranj::stats {
+    void conditionHit(bool condition, usize slot = 0);
+    void range(i64 value, usize slot = 0);
+    void mean(i64 value, usize slot = 0);
 
-#include "bitboard.h"
-#include "position/position.h"
-
-namespace oranj
-{
-	auto printBitboard(std::ostream &out, Bitboard board) -> void;
-	auto printBitboardCompact(std::ostream &out, Bitboard board) -> void;
-
-	auto printBoard(std::ostream &out, const Position &position) -> void;
-
-	auto printScore(std::ostream &out, Score score) -> void;
-}
+    void print();
+} // namespace oranj::stats

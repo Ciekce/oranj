@@ -24,57 +24,49 @@
 
 #include "move.h"
 
-namespace oranj::search
-{
-	struct SearchData
-	{
-		i32 rootDepth{};
+namespace oranj::search {
+    struct SearchData {
+        i32 rootDepth{};
 
-		std::atomic<i32> seldepth{};
-		std::atomic<usize> nodes{};
+        std::atomic<i32> seldepth{};
+        std::atomic<usize> nodes{};
 
-		SearchData() = default;
+        SearchData() = default;
 
-		SearchData(const SearchData &other)
-		{
-			*this = other;
-		}
+        SearchData(const SearchData& other) {
+            *this = other;
+        }
 
-		[[nodiscard]] inline auto loadSeldepth() const
-		{
-			return seldepth.load(std::memory_order::relaxed);
-		}
+        [[nodiscard]] inline i32 loadSeldepth() const {
+            return seldepth.load(std::memory_order::relaxed);
+        }
 
-		inline auto updateSeldepth(i32 v)
-		{
-			if (v > loadSeldepth())
-				seldepth.store(v, std::memory_order::relaxed);
-		}
+        inline void updateSeldepth(i32 v) {
+            if (v > loadSeldepth()) {
+                seldepth.store(v, std::memory_order::relaxed);
+            }
+        }
 
-		[[nodiscard]] inline auto loadNodes() const
-		{
-			return nodes.load(std::memory_order::relaxed);
-		}
+        [[nodiscard]] inline usize loadNodes() const {
+            return nodes.load(std::memory_order::relaxed);
+        }
 
-		inline auto incNodes()
-		{
-			nodes.fetch_add(1, std::memory_order::relaxed);
-		}
+        inline void incNodes() {
+            nodes.fetch_add(1, std::memory_order::relaxed);
+        }
 
-		auto operator=(const SearchData &other) -> SearchData &
-		{
-			rootDepth = other.rootDepth;
+        SearchData& operator=(const SearchData& other) {
+            rootDepth = other.rootDepth;
 
-			seldepth.store(other.seldepth.load());
-			nodes.store(other.nodes.load());
+            seldepth.store(other.seldepth.load());
+            nodes.store(other.nodes.load());
 
-			return *this;
-		}
-	};
+            return *this;
+        }
+    };
 
-	struct PlayedMove
-	{
-		Piece moving;
-		Square dst;
-	};
-}
+    struct PlayedMove {
+        Piece moving;
+        Square dst;
+    };
+} // namespace oranj::search

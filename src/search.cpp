@@ -18,1217 +18,1383 @@
 
 #include "search.h"
 
-#include <iostream>
+#include <algorithm>
 #include <cmath>
+#include <tuple>
 
-#include "uci.h"
 #include "limit/trivial.h"
 #include "opts.h"
 #include "see.h"
+#include "stats.h"
+#include "uci.h"
+
+namespace oranj::search {
+    using namespace oranj::tunable;
+
+    using util::Instant;
+
+    namespace {
+        constexpr f64 kWidenReportDelay = 1.0;
+        constexpr f64 kCurrmoveReportDelay = 2.5;
+
+        // [improving][clamped depth]
+        constexpr auto kLmpTable = [] {
+            util::MultiArray<i32, 2, 16> result{};
+
+            for (i32 improving = 0; improving < 2; ++improving) {
+                for (i32 depth = 0; depth < 16; ++depth) {
+                    result[improving][depth] = (3 + depth * depth) / (2 - improving);
+                }
+            }
+
+            return result;
+        }();
+
+        [[nodiscard]] constexpr Score drawScore(usize nodes) {
+            return 2 - static_cast<Score>(nodes % 4);
+        }
+
+        inline void generateLegal(MoveList& moves, const Position& pos) {
+            ScoredMoveList generated{};
+            generateAll(generated, pos);
+
+            for (const auto [move, _s] : generated) {
+                if (pos.isLegal(move)) {
+                    moves.push(move);
+                }
+            }
+        }
+
+        [[nodiscard]] constexpr bool isWin(Score score) {
+            return std::abs(score) > kScoreWin;
+        }
+    } // namespace
+
+    Searcher::Searcher(usize ttSizeMib) :
+            m_ttable{ttSizeMib}, m_startTime{Instant::now()} {
+        m_threadData.resize(1);
+        m_threads.emplace_back([this] { run(0); });
+        m_initBarrier.arriveAndWait();
+    }
+
+    void Searcher::newGame() {
+        // Finalisation (init) clears the TT, so don't clear it twice
+        if (!m_ttable.finalize()) {
+            m_ttable.clear();
+        }
+
+        for (auto& thread : m_threadData) {
+            thread->history.clear();
+            thread->correctionHistory.clear();
+        }
+    }
+
+    void Searcher::ensureReady() {
+        m_ttable.finalize();
+    }
+
+    void Searcher::startSearch(
+        const Position& pos,
+        std::span<const u64> keyHistory,
+        Instant startTime,
+        i32 maxDepth,
+        std::span<Move> moves,
+        std::unique_ptr<limit::ISearchLimiter> limiter,
+        bool infinite
+    ) {
+        if (!m_limiter && !limiter) {
+            eprintln("mising limiter");
+            return;
+        }
+
+        const auto initStart = Instant::now();
+
+        if (m_ttable.finalize()) {
+            const auto initTime = initStart.elapsed();
+            println(
+                "info string No ucinewgame or isready before go, lost {} ms to TT initialization",
+                static_cast<u32>(initTime * 1000.0)
+            );
+        }
 
-namespace oranj::search
-{
-	using namespace oranj::tunable;
-
-	using util::Instant;
-
-	namespace
-	{
-		constexpr f64 WidenReportDelay = 1.0;
-		constexpr f64 CurrmoveReportDelay = 2.5;
-
-		// [improving][clamped depth]
-		constexpr auto LmpTable = []
-		{
-			util::MultiArray<i32, 2, 16> result{};
-
-			for (i32 improving = 0; improving < 2; ++improving)
-			{
-				for (i32 depth = 0; depth < 16; ++depth)
-				{
-					result[improving][depth] = (3 + depth * depth) / (2 - improving);
-				}
-			}
-
-			return result;
-		}();
-
-		inline auto drawScore(usize nodes)
-		{
-			return 2 - static_cast<Score>(nodes % 4);
-		}
-
-		inline auto generateLegal(MoveList &moves, const Position &pos)
-		{
-			ScoredMoveList generated{};
-			generateAll(generated, pos);
-
-			for (const auto [move, _s] : generated)
-			{
-				if (pos.isLegal(move))
-					moves.push(move);
-			}
-		}
-	}
-
-	Searcher::Searcher(usize ttSizeMib)
-		: m_ttable{ttSizeMib},
-		  m_startTime{Instant::now()}
-	{
-		auto &thread = m_threads.emplace_back();
-
-		thread.id = 0;
-		thread.thread = std::thread{[this, &thread]
-		{
-			run(thread);
-		}};
-	}
-
-	auto Searcher::newGame() -> void
-	{
-		// Finalisation (init) clears the TT, so don't clear it twice
-		if (!m_ttable.finalize())
-			m_ttable.clear();
-
-		for (auto &thread : m_threads)
-		{
-			thread.history.clear();
-			thread.correctionHistory.clear();
-		}
-	}
-
-	auto Searcher::ensureReady() -> void
-	{
-		m_ttable.finalize();
-	}
-
-	auto Searcher::startSearch(const Position &pos, Instant startTime, i32 maxDepth,
-		std::span<Move> moves, std::unique_ptr<limit::ISearchLimiter> limiter, bool infinite) -> void
-	{
-		if (!m_limiter && !limiter)
-		{
-			std::cerr << "missing limiter" << std::endl;
-			return;
-		}
-
-		const auto initStart = Instant::now();
-
-		if (m_ttable.finalize())
-		{
-			const auto initTime = initStart.elapsed();
-
-			std::cout
-				<< "info string No ucinewgame or isready before go, lost "
-				<< static_cast<u32>(initTime * 1000.0)
-				<< " ms to TT initialization"
-				<< std::endl;
-		}
-
-		m_resetBarrier.arriveAndWait();
-
-		m_infinite = infinite;
+        m_resetBarrier.arriveAndWait();
+
+        m_infinite = infinite;
+        m_maxDepth = maxDepth;
 
-		m_minRootScore = -ScoreInf;
-		m_maxRootScore =  ScoreInf;
+        m_minRootScore = -kScoreInf;
+        m_maxRootScore = kScoreInf;
 
-		RootStatus status;
+        if (!moves.empty()) {
+            m_rootMoveList.resize(moves.size());
+            std::ranges::copy(moves, m_rootMoveList.begin());
 
-		if (!moves.empty())
-		{
-			m_rootMoves.resize(moves.size());
-			std::ranges::copy(moves, m_rootMoves.begin());
+            m_rootStatus = RootStatus::kSearchmoves;
+        } else {
+            m_rootStatus = initRootMoveList(pos);
 
-			status = RootStatus::Searchmoves;
-		}
-		else
-		{
-			status = initRootMoves(pos);
+            if (m_rootStatus == RootStatus::kNoLegalMoves) {
+                println("info string no legal moves");
+                return;
+            }
+        }
 
-			if (status == RootStatus::NoLegalMoves)
-			{
-				std::cout << "info string no legal moves" << std::endl;
-				return;
-			}
-		}
+        assert(!m_rootMoveList.empty());
 
-		assert(!m_rootMoves.empty());
+        m_multiPv = std::min<u32>(g_opts.multiPv, m_rootMoveList.size());
 
-		if (limiter)
-			m_limiter = std::move(limiter);
+        if (limiter) {
+            m_limiter = std::move(limiter);
+        }
 
-		const auto contempt = g_opts.contempt;
+        // Cap search time if we have one legal move
+        if (m_rootMoveList.size() == 1) {
+            m_limiter->stopEarly();
+        }
 
-		m_contempt[static_cast<i32>(pos.  toMove())] =  contempt;
-		m_contempt[static_cast<i32>(pos.opponent())] = -contempt;
+        const auto contempt = g_opts.contempt;
 
-		for (auto &thread : m_threads)
-		{
-			thread.maxDepth = maxDepth;
-			thread.search = SearchData{};
-			thread.pos = pos;
+        m_contempt[static_cast<i32>(pos.stm())] = contempt;
+        m_contempt[static_cast<i32>(pos.nstm())] = -contempt;
 
-			thread.nnueState.reset(thread.pos.bbs(), thread.pos.kings());
-		}
+        m_setupInfo.rootPos = pos;
 
-		m_startTime = startTime;
+        m_setupInfo.keyHistorySize = util::pad<usize{256}>(keyHistory.size());
+        m_setupInfo.keyHistory = keyHistory;
 
-		m_stop.store(false, std::memory_order::seq_cst);
-		m_runningThreads.store(static_cast<i32>(m_threads.size()));
+        m_startTime = startTime;
 
-		m_searching.store(true, std::memory_order::relaxed);
+        m_stop.store(false, std::memory_order::seq_cst);
+        m_runningThreads.store(static_cast<i32>(m_threads.size()));
 
-		m_idleBarrier.arriveAndWait();
-	}
+        m_searching.store(true, std::memory_order::relaxed);
 
-	auto Searcher::stop() -> void
-	{
-		m_stop.store(true, std::memory_order::relaxed);
+        m_idleBarrier.arriveAndWait();
+        m_setupBarrier.arriveAndWait();
+    }
 
-		// safe, always runs from uci thread
-		if (m_runningThreads.load() > 0)
-		{
-			std::unique_lock lock{m_stopMutex};
-			m_stopSignal.wait(lock, [this]
-			{
-				return m_runningThreads.load(std::memory_order::seq_cst) == 0;
-			});
-		}
-	}
+    void Searcher::stop() {
+        m_stop.store(true, std::memory_order::relaxed);
+        waitForStop();
+    }
 
-	auto Searcher::runDatagenSearch(ThreadData &thread) -> std::pair<Score, Score>
-	{
-		if (initRootMoves(thread.pos) == RootStatus::NoLegalMoves)
-			return {-ScoreMate, -ScoreMate};
+    void Searcher::waitForStop() {
+        std::unique_lock lock{m_stopMutex};
+        if (m_runningThreads.load() > 0) {
+            m_stopSignal.wait(lock, [this] { return m_runningThreads.load(std::memory_order::seq_cst) == 0; });
+        }
+    }
 
-		m_infinite = false;
+    std::pair<Score, Score> Searcher::runDatagenSearch(ThreadData& thread) {
+        if (initRootMoveList(thread.rootPos) == RootStatus::kNoLegalMoves) {
+            return {-kScoreMate, -kScoreMate};
+        }
 
-		m_stop.store(false, std::memory_order::seq_cst);
+        m_multiPv = 1;
+        m_infinite = false;
 
-		const auto score = searchRoot(thread, false);
+        m_stop.store(false, std::memory_order::seq_cst);
 
-		m_ttable.age();
+        const auto score = searchRoot(thread, false);
 
-		const auto whitePovScore = thread.pos.toMove() == Color::Black ? -score : score;
-		return {whitePovScore, wdl::normalizeScore(whitePovScore, thread.pos.classicalMaterial())};
-	}
+        m_ttable.age();
 
-	auto Searcher::runBench(BenchData &data, const Position &pos, i32 depth) -> void
-	{
-		m_limiter = std::make_unique<limit::InfiniteLimiter>();
-		m_infinite = false;
+        const auto whitePovScore = thread.rootPos.stm() == Color::kBlack ? -score : score;
+        return {whitePovScore, wdl::normalizeScore(whitePovScore, thread.rootPos.classicalMaterial())};
+    }
 
-		m_contempt = {};
+    void Searcher::runBench(BenchData& data, const Position& pos, i32 depth) {
+        m_limiter = std::make_unique<limit::InfiniteLimiter>();
+        m_infinite = false;
 
-		// this struct is a small boulder the size of a large boulder
-		// and overflows the stack if not on the heap
-		auto thread = std::make_unique<ThreadData>();
+        m_contempt = {};
 
-		thread->pos = pos;
-		thread->maxDepth = depth;
+        m_maxDepth = depth;
+        m_multiPv = 1;
 
-		thread->nnueState.reset(thread->pos.bbs(), thread->pos.kings());
+        // this struct is a small boulder the size of a large boulder
+        // and overflows the stack if not on the heap
+        auto thread = std::make_unique<ThreadData>();
 
-		if (initRootMoves(thread->pos) == RootStatus::NoLegalMoves)
-			return;
+        thread->rootPos = pos;
+        thread->nnueState.reset(thread->rootPos.bbs(), thread->rootPos.kings());
 
-		m_stop.store(false, std::memory_order::seq_cst);
+        if (initRootMoveList(thread->rootPos) == RootStatus::kNoLegalMoves) {
+            return;
+        }
 
-		const auto start = Instant::now();
+        m_stop.store(false, std::memory_order::seq_cst);
 
-		searchRoot(*thread, false);
+        const auto start = Instant::now();
 
-		m_ttable.age();
+        searchRoot(*thread, false);
 
-		data.search = thread->search;
-		data.time = start.elapsed();
-	}
+        m_ttable.age();
 
-	auto Searcher::setThreads(u32 threadCount) -> void
-	{
-		if (threadCount == m_threads.size())
-			return;
+        data.search = thread->search;
+        data.time = start.elapsed();
+    }
 
-		stopThreads();
+    void Searcher::setThreads(u32 threadCount) {
+        if (threadCount == m_threads.size()) {
+            return;
+        }
 
-		m_quit.store(false, std::memory_order::seq_cst);
+        stopThreads();
 
-		m_threads.clear();
-		m_threads.shrink_to_fit();
-		m_threads.reserve(threadCount);
+        m_quit.store(false, std::memory_order::seq_cst);
 
-		m_resetBarrier.reset(threadCount + 1);
-		m_idleBarrier.reset(threadCount + 1);
+        m_threads.clear();
+        m_threads.shrink_to_fit();
+        m_threads.reserve(threadCount);
 
-		m_searchEndBarrier.reset(threadCount);
+        m_threadData.clear();
+        m_threadData.resize(threadCount);
+        m_threadData.shrink_to_fit();
 
-		for (u32 threadId = 0; threadId < threadCount; ++threadId)
-		{
-			auto &thread = m_threads.emplace_back();
+        m_initBarrier.reset(threadCount + 1);
 
-			thread.id = threadId;
-			thread.thread = std::thread{[this, &thread]
-			{
-				run(thread);
-			}};
-		}
-	}
+        m_resetBarrier.reset(threadCount + 1);
+        m_idleBarrier.reset(threadCount + 1);
+        m_setupBarrier.reset(threadCount + 1);
 
-	auto Searcher::initRootMoves(const Position &pos) -> RootStatus
-	{
-		m_rootMoves.clear();
-		generateLegal(m_rootMoves, pos);
+        m_searchEndBarrier.reset(threadCount);
 
-		return m_rootMoves.empty() ? RootStatus::NoLegalMoves : RootStatus::Generated;
-	}
+        for (u32 threadId = 0; threadId < threadCount; ++threadId) {
+            m_threads.emplace_back([this, threadId] { run(threadId); });
+        }
 
-	auto Searcher::stopThreads() -> void
-	{
-		m_quit.store(true, std::memory_order::release);
+        m_initBarrier.arriveAndWait();
+    }
 
-		m_resetBarrier.arriveAndWait();
-		m_idleBarrier.arriveAndWait();
+    RootStatus Searcher::initRootMoveList(const Position& pos) {
+        m_rootMoveList.clear();
+        generateLegal(m_rootMoveList, pos);
 
-		for (auto &thread : m_threads)
-		{
-			thread.thread.join();
-		}
-	}
+        return m_rootMoveList.empty() ? RootStatus::kNoLegalMoves : RootStatus::kGenerated;
+    }
 
-	auto Searcher::run(ThreadData &thread) -> void
-	{
-		while (true)
-		{
-			m_resetBarrier.arriveAndWait();
-			m_idleBarrier.arriveAndWait();
+    void Searcher::stopThreads() {
+        m_quit.store(true, std::memory_order::release);
 
-			if (m_quit.load(std::memory_order::acquire))
-				return;
+        m_resetBarrier.arriveAndWait();
+        m_idleBarrier.arriveAndWait();
 
-			searchRoot(thread, true);
-		}
-	}
+        for (auto& thread : m_threads) {
+            thread.join();
+        }
+    }
 
-	auto Searcher::searchRoot(ThreadData &thread, bool actualSearch) -> Score
-	{
-		assert(!m_rootMoves.empty());
+    void Searcher::run(u32 threadId) {
+        // Ensure thread data is allocated on the correct
+        // NUMA node by initialising it from this thread
+        m_threadData[threadId] = std::make_unique<ThreadData>();
 
-		auto &searchData = thread.search;
+        auto& thread = *m_threadData[threadId];
 
-		const bool mainThread = actualSearch && thread.isMainThread();
+        thread.id = threadId;
 
-		thread.rootPv.moves[0] = NullMove;
-		thread.rootPv.length = 0;
+        m_initBarrier.arriveAndWait();
 
-		auto score = -ScoreInf;
-		PvList pv{};
+        while (true) {
+            m_resetBarrier.arriveAndWait();
+            m_idleBarrier.arriveAndWait();
 
-		searchData.nodes = 0;
-		thread.stack[0].killers.clear();
+            if (m_quit.load(std::memory_order::acquire)) {
+                return;
+            }
 
-		i32 depthCompleted{};
+            searchRoot(thread, true);
+        }
+    }
 
-		for (i32 depth = 1;; ++depth)
-		{
-			searchData.rootDepth = depth;
-			searchData.seldepth = 0;
+    Score Searcher::searchRoot(ThreadData& thread, bool actualSearch) {
+        if (actualSearch) {
+            thread.search = SearchData{};
+            thread.rootPos = m_setupInfo.rootPos;
 
-			// count the root node
-			searchData.incNodes();
+            thread.keyHistory.clear();
+            thread.keyHistory.reserve(m_setupInfo.keyHistorySize);
 
-			auto delta = initialAspWindow();
+            std::ranges::copy(m_setupInfo.keyHistory, std::back_inserter(thread.keyHistory));
 
-			auto alpha = -ScoreInf;
-			auto beta = ScoreInf;
+            thread.nnueState.reset(thread.rootPos.bbs(), thread.rootPos.kings());
 
-			if (depth >= 3)
-			{
-				alpha = std::max(score - delta, -ScoreInf);
-				beta  = std::min(score + delta,  ScoreInf);
-			}
+            m_setupBarrier.arriveAndWait();
+        }
 
-			Score newScore{};
+        assert(!m_rootMoveList.empty());
 
-			i32 aspReduction = 0;
+        thread.rootMoves.clear();
+        thread.rootMoves.reserve(m_rootMoveList.size());
 
-			while (!hasStopped())
-			{
-				const auto aspDepth = std::max(depth - aspReduction, 1); // paranoia
-				newScore = search<true, true>(thread, thread.rootPv, aspDepth, 0, 0, alpha, beta, false);
+        for (const auto move : m_rootMoveList) {
+            auto& rootMove = thread.rootMoves.emplace_back();
 
-				if ((newScore > alpha && newScore < beta) || hasStopped())
-					break;
+            rootMove.pv.moves[0] = move;
+            rootMove.pv.length = 1;
+        }
 
-				if (mainThread)
-				{
-					const auto time = elapsed();
-					if (time >= WidenReportDelay)
-						report(thread, thread.rootPv, depth, time, newScore, alpha, beta);
-				}
+        auto& searchData = thread.search;
 
-				if (newScore <= alpha)
-				{
-					aspReduction = 0;
+        const bool mainThread = actualSearch && thread.isMainThread();
 
-					beta = (alpha + beta) / 2;
-					alpha = std::max(newScore - delta, -ScoreInf);
-				}
-				else
-				{
-					aspReduction = std::min(aspReduction + 1, 3);
-					beta = std::min(newScore + delta, ScoreInf);
-				}
+        PvList rootPv{};
 
-				delta += delta * aspWideningFactor() / 16;
-			}
+        searchData.nodes = 0;
+        thread.stack[0].killers.clear();
 
-			assert(thread.rootPv.length > 0);
+        thread.depthCompleted = 0;
 
-			if (hasStopped())
-				break;
+        for (i32 depth = 1;; ++depth) {
+            searchData.rootDepth = depth;
 
-			depthCompleted = depth;
+            for (thread.pvIdx = 0; thread.pvIdx < m_multiPv; ++thread.pvIdx) {
+                searchData.seldepth = 0;
 
-			score = newScore;
-			pv = thread.rootPv;
+                // count the root node
+                searchData.incNodes();
 
-			if (depth >= thread.maxDepth)
-			{
-				if (mainThread && m_infinite)
-					report(thread, pv, searchData.rootDepth, elapsed(), score);
-				break;
-			}
+                auto delta = initialAspWindow();
 
-			if (mainThread)
-			{
-				m_limiter->update(thread.search, score, pv.moves[0], thread.search.loadNodes());
+                auto alpha = -kScoreInf;
+                auto beta = kScoreInf;
 
-				if (checkSoftTimeout(thread.search, true))
-					break;
+                if (depth >= 3) {
+                    const auto lastScore = thread.rootMoves[thread.pvIdx].score;
 
-				report(thread, pv, searchData.rootDepth, elapsed(), score);
-			}
-			else if (checkSoftTimeout(thread.search, thread.isMainThread()))
-				break;
-		}
+                    alpha = std::max(lastScore - delta, -kScoreInf);
+                    beta = std::min(lastScore + delta, kScoreInf);
+                }
 
-		const auto waitForThreads = [&]
-		{
-			--m_runningThreads;
-			m_stopSignal.notify_all();
+                Score newScore{};
 
-			m_searchEndBarrier.arriveAndWait();
-		};
+                i32 aspReduction = 0;
 
-		if (mainThread)
-		{
-			auto time = elapsed();
+                while (!hasStopped()) {
+                    const auto aspDepth = std::max(depth - aspReduction, 1); // paranoia
+                    newScore = search<true, true>(thread, thread.rootPos, rootPv, aspDepth, 0, 0, alpha, beta, false);
 
-			if (m_infinite)
-			{
-				// don't print bestmove until stopped when go infinite'ing
-				// this makes handling reports a bit messy, unfortunately
-				while (!hasStopped())
-				{
-					std::this_thread::yield();
-				}
-			}
+                    std::stable_sort(
+                        thread.rootMoves.begin() + thread.pvIdx,
+                        thread.rootMoves.end(),
+                        [](const RootMove& a, const RootMove& b) { return a.score > b.score; }
+                    );
 
-			const std::unique_lock lock{m_searchMutex};
+                    if ((newScore > alpha && newScore < beta) || hasStopped()) {
+                        break;
+                    }
 
-			m_stop.store(true, std::memory_order::seq_cst);
-			waitForThreads();
+                    if (mainThread) {
+                        const auto time = elapsed();
+                        if (time >= kWidenReportDelay) {
+                            reportSingle(thread, thread.pvIdx, depth, time);
+                        }
+                    }
 
-			if (!m_infinite)
-				time = elapsed();
+                    if (newScore <= alpha) {
+                        aspReduction = 0;
 
-			finalReport(thread, pv, depthCompleted, time, score);
+                        beta = (alpha + beta) / 2;
+                        alpha = std::max(newScore - delta, -kScoreInf);
+                    } else {
+                        aspReduction = std::min(aspReduction + 1, 3);
+                        beta = std::min(newScore + delta, kScoreInf);
+                    }
 
-			m_ttable.age();
+                    delta += delta * aspWideningFactor() / 16;
+                }
 
-			m_searching.store(false, std::memory_order::relaxed);
-		}
-		else waitForThreads();
+                std::ranges::stable_sort(thread.rootMoves, [](const RootMove& a, const RootMove& b) {
+                    return a.score > b.score;
+                });
 
-		return score;
-	}
+                assert(thread.pvMove().pv.length > 0);
 
-	template <bool PvNode, bool RootNode>
-	auto Searcher::search(ThreadData &thread, PvList &pv, i32 depth,
-		i32 ply, u32 moveStackIdx, Score alpha, Score beta, bool cutnode) -> Score
-	{
-		assert(ply >= 0 && ply <= MaxDepth);
-		assert(RootNode || ply > 0);
-		assert(PvNode || alpha + 1 == beta);
+                if (hasStopped()) {
+                    break;
+                }
+            }
 
-		if (ply > 0 && checkHardTimeout(thread.search, thread.isMainThread()))
-			return 0;
+            if (hasStopped()) {
+                break;
+            }
 
-		auto &pos = thread.pos;
-		const auto &boards = pos.boards();
-		const auto &bbs = pos.bbs();
+            thread.depthCompleted = depth;
 
-		if constexpr (!RootNode)
-		{
-			alpha = std::max(alpha, -ScoreMate + ply);
-			beta  = std::min( beta,  ScoreMate - ply - 1);
+            if (depth >= m_maxDepth) {
+                if (mainThread && m_infinite) {
+                    report(thread, searchData.rootDepth, elapsed());
+                }
+                break;
+            }
 
-			if (alpha >= beta)
-				return alpha;
+            if (mainThread) {
+                m_limiter->update(
+                    thread.search,
+                    thread.pvMove().score,
+                    thread.pvMove().pv.moves[0],
+                    thread.search.loadNodes()
+                );
 
-			if (alpha < 0 && pos.hasCycle(ply))
-			{
-				alpha = drawScore(thread.search.loadNodes());
-				if (alpha >= beta)
-					return alpha;
-			}
-		}
+                if (checkSoftTimeout(thread.search, true)) {
+                    break;
+                }
 
-		if (depth <= 0)
-			return qsearch<PvNode>(thread, ply, moveStackIdx, alpha, beta);
+                report(thread, searchData.rootDepth, elapsed());
+            } else if (checkSoftTimeout(thread.search, thread.isMainThread())) {
+                break;
+            }
+        }
 
-		thread.search.updateSeldepth(ply + 1);
+        const auto waitForThreads = [&] {
+            {
+                const std::unique_lock lock{m_stopMutex};
+                --m_runningThreads;
+                m_stopSignal.notify_all();
+            }
 
-		const bool inCheck = pos.isCheck();
+            m_searchEndBarrier.arriveAndWait();
+        };
 
-		if (ply >= MaxDepth)
-			return inCheck ? 0 : eval::adjustedStaticEval(pos, thread.contMoves, ply, thread.nnueState, &thread.correctionHistory, m_contempt);
+        if (mainThread) {
+            if (m_infinite) {
+                // don't print bestmove until stopped when go infinite'ing
+                while (!hasStopped()) {
+                    std::this_thread::yield();
+                }
+            }
 
-		const auto us = pos.toMove();
-		const auto them = oppColor(us);
+            const std::unique_lock lock{m_searchMutex};
 
-		assert(!PvNode || !cutnode);
+            m_stop.store(true, std::memory_order::seq_cst);
+            waitForThreads();
 
-		const auto *parent = RootNode ? nullptr : &thread.stack[ply - 1];
-		auto &curr = thread.stack[ply];
+            finalReport();
 
-		assert(!RootNode || curr.excluded == NullMove);
-
-		auto &moveStack = thread.moveStack[moveStackIdx];
-
-		ProbedTTableEntry ttEntry{};
-		bool ttHit = false;
-
-		if (!curr.excluded)
-		{
-			ttHit = m_ttable.probe(ttEntry, pos.key(), ply);
-
-			if (!PvNode
-				&& ttEntry.depth >= depth
-				&& (ttEntry.score <= alpha || cutnode))
-			{
-				if (ttEntry.flag == TtFlag::Exact
-					|| ttEntry.flag == TtFlag::UpperBound && ttEntry.score <= alpha
-					|| ttEntry.flag == TtFlag::LowerBound && ttEntry.score >= beta)
-				{
-					if (ttEntry.score >= beta
-						&& ttEntry.move
-						&& !pos.isNoisy(ttEntry.move)
-						&& pos.isPseudolegal(ttEntry.move))
-					{
-						const auto bonus = historyBonus(depth);
-						thread.history.updateQuietScore(thread.conthist, ply,
-							pos.threats(), boards.pieceAt(ttEntry.move.src()), ttEntry.move, bonus);
-					}
-
-					return ttEntry.score;
-				}
-				else if (depth <= 6)
-					++depth;
-			}
-		}
-
-		const bool ttMoveNoisy = ttEntry.move && pos.isNoisy(ttEntry.move);
-		const bool ttpv = PvNode || ttEntry.wasPv;
-
-		if (depth >= 3
-			&& !curr.excluded
-			&& (PvNode || cutnode)
-			&& (!ttEntry.move || ttEntry.depth + 3 < depth))
-			--depth;
-
-		Score rawStaticEval{};
-		std::optional<Score> complexity{};
-
-		if (!curr.excluded)
-		{
-			if (inCheck)
-				rawStaticEval = ScoreNone;
-			else if (ttHit && ttEntry.staticEval != ScoreNone)
-				rawStaticEval = ttEntry.staticEval;
-			else rawStaticEval = eval::staticEval(pos, thread.nnueState, m_contempt);
-
-			if (!ttHit)
-				m_ttable.put(pos.key(), ScoreNone, rawStaticEval, NullMove, 0, 0, TtFlag::None, ttpv);
-
-			if (inCheck)
-				curr.staticEval = ScoreNone;
-			else
-			{
-				Score corrDelta{};
-				curr.staticEval = eval::adjustEval(pos, thread.contMoves,
-					ply, &thread.correctionHistory, rawStaticEval, &corrDelta);
-				complexity = corrDelta;
-			}
-		}
+            m_ttable.age();
+            stats::print();
 
-		const bool improving = [&]
-		{
-			if (inCheck)
-				return false;
-			if (ply > 1 && thread.stack[ply - 2].staticEval != ScoreNone)
-				return curr.staticEval > thread.stack[ply - 2].staticEval;
-			if (ply > 3 && thread.stack[ply - 4].staticEval != ScoreNone)
-				return curr.staticEval > thread.stack[ply - 4].staticEval;
-			return true;
-		}();
+            m_searching.store(false, std::memory_order::relaxed);
+        } else {
+            waitForThreads();
+        }
 
-		if (!PvNode
-			&& !inCheck
-			&& !curr.excluded)
-		{
-			if (depth <= 6
-				&& curr.staticEval - rfpMargin() * std::max(depth - improving, 0) >= beta)
-				return (curr.staticEval + beta) / 2;
+        return thread.pvMove().score;
+    }
 
-			if (depth <= 4
-				&& std::abs(alpha) < 2000
-				&& curr.staticEval + razoringMargin() * depth <= alpha)
-			{
-				const auto score = qsearch(thread, ply, moveStackIdx, alpha, alpha + 1);
-				if (score <= alpha)
-					return score;
-			}
+    template <bool kPvNode, bool kRootNode>
+    Score Searcher::search(
+        ThreadData& thread,
+        const Position& pos,
+        PvList& pv,
+        i32 depth,
+        i32 ply,
+        u32 moveStackIdx,
+        Score alpha,
+        Score beta,
+        bool cutnode
+    ) {
+        assert(ply >= 0 && ply <= kMaxDepth);
+        assert(kRootNode || ply > 0);
+        assert(kPvNode || alpha + 1 == beta);
 
-			if (depth >= 4
-				&& ply >= thread.minNmpPly
-				&& curr.staticEval >= beta
-				&& !parent->move.isNull()
-				&& !(ttEntry.flag == TtFlag::UpperBound && ttEntry.score < beta)
-				&& !bbs.nonPk(us).empty())
-			{
-				m_ttable.prefetch(pos.key() ^ keys::color());
+        if (ply > 0 && checkHardTimeout(thread.search, thread.isMainThread())) {
+            return 0;
+        }
 
-				const auto R = 4
-					+ depth / 5
-					+ std::min((curr.staticEval - beta) / nmpEvalReductionScale(), 2)
-					+ improving;
+        const auto& boards = pos.boards();
+        const auto& bbs = pos.bbs();
 
-				const auto score = [&]
-				{
-					thread.setNullmove(ply);
-					const auto guard = pos.applyNullMove();
+        if constexpr (!kRootNode) {
+            alpha = std::max(alpha, -kScoreMate + ply);
+            beta = std::min(beta, kScoreMate - ply - 1);
 
-					return -search(thread, curr.pv, depth - R, ply + 1, moveStackIdx, -beta, -beta + 1, !cutnode);
-				}();
+            if (alpha >= beta) {
+                return alpha;
+            }
 
-				if (score >= beta)
-				{
-					if (depth <= 14 || thread.minNmpPly > 0)
-						return score > ScoreWin ? beta : score;
+            if (alpha < 0 && pos.hasCycle(ply, thread.keyHistory)) {
+                alpha = drawScore(thread.search.loadNodes());
+                if (alpha >= beta) {
+                    return alpha;
+                }
+            }
+        }
 
-					thread.minNmpPly = ply + (depth - R) * 3 / 4;
+        if (depth <= 0) {
+            return qsearch<kPvNode>(thread, pos, ply, moveStackIdx, alpha, beta);
+        }
 
-					const auto verifScore = search(thread, curr.pv, depth - R, ply, moveStackIdx + 1, beta - 1, beta, true);
+        thread.search.updateSeldepth(ply + 1);
 
-					thread.minNmpPly = 0;
+        const bool inCheck = pos.isCheck();
 
-					if (verifScore >= beta)
-						return verifScore;
-				}
-			}
+        if (ply >= kMaxDepth) {
+            return inCheck ? 0
+                           : eval::adjustedStaticEval(
+                                 pos,
+                                 thread.contMoves,
+                                 ply,
+                                 thread.nnueState,
+                                 &thread.correctionHistory,
+                                 m_contempt
+                             );
+        }
 
-			const auto probcutBeta = beta + probcutMargin();
-			const auto probcutDepth = std::max(depth - 3, 1);
+        const auto us = pos.stm();
+        const auto them = oppColor(us);
 
-			if (!ttpv
-				&& depth >= 7
-				&& std::abs(beta) < ScoreWin
-				&& (!ttEntry.move || ttMoveNoisy)
-				&& !(ttHit && ttEntry.depth >= probcutDepth && ttEntry.score < probcutBeta))
-			{
-				const auto seeThreshold = (probcutBeta - curr.staticEval) * probcutSeeScale() / 16;
-				const auto keyBefore = pos.key();
+        assert(!kPvNode || !cutnode);
 
-				auto generator = MoveGenerator::probcut(pos, ttEntry.move, moveStack.movegenData, thread.history);
+        const auto* parent = kRootNode ? nullptr : &thread.stack[ply - 1];
+        auto& curr = thread.stack[ply];
 
-				while (const auto move = generator.next())
-				{
-					if (!pos.isLegal(move))
-						continue;
+        assert(!kRootNode || curr.excluded == kNullMove);
 
-					if (!see::see(pos, move, seeThreshold))
-						continue;
+        auto& moveStack = thread.moveStack[moveStackIdx];
 
-					thread.search.incNodes();
+        ProbedTTableEntry ttEntry{};
+        bool ttHit = false;
 
-					m_ttable.prefetch(pos.roughKeyAfter(move));
-
-					thread.setMove(ply, move);
-					const auto guard = pos.applyMove(move, &thread.nnueState);
-
-					auto score = -qsearch(thread, ply + 1, moveStackIdx + 1, -probcutBeta, -probcutBeta + 1);
-
-					if (score >= probcutBeta)
-						score = -search(thread, curr.pv, probcutDepth - 1, ply + 1,
-							moveStackIdx + 1, -probcutBeta, -probcutBeta + 1, !cutnode);
-
-					if (hasStopped())
-						return 0;
-
-					if (score >= probcutBeta)
-					{
-						m_ttable.put(keyBefore, score, curr.staticEval,
-							move, probcutDepth, ply, TtFlag::LowerBound, false);
-						return score;
-					}
-				}
-			}
-		}
+        if (!curr.excluded) {
+            ttHit = m_ttable.probe(ttEntry, pos.key(), ply);
 
-		if constexpr (!RootNode)
-			curr.multiExtensions = parent->multiExtensions;
-
-		thread.stack[ply + 1].killers.clear();
-
-		moveStack.failLowQuiets .clear();
-		moveStack.failLowNoisies.clear();
-
-		const auto lmrMinMoves
-			= RootNode ? 5
-			:   PvNode ? 4
-			           : 2;
-
-		auto bestMove = NullMove;
-		auto bestScore = -ScoreInf;
-
-		auto ttFlag = TtFlag::UpperBound;
-
-		auto generator = MoveGenerator::main(pos, moveStack.movegenData,
-			ttEntry.move, curr.killers, thread.history, thread.conthist, ply);
-
-		u32 legalMoves = 0;
-
-		while (const auto move = generator.next())
-		{
-			if (move == curr.excluded)
-				continue;
-
-			if constexpr (RootNode)
-			{
-				if (!isLegalRootMove(move))
-					continue;
-
-				assert(pos.isLegal(move));
-			}
-			else if (!pos.isLegal(move))
-				continue;
-
-			const bool quietOrLosing = generator.stage() > MovegenStage::GoodNoisy;
-
-			const bool noisy = pos.isNoisy(move);
-			const auto moving = boards.pieceAt(move.src());
-
-			const auto captured = pos.captureTarget(move);
-
-			const auto baseLmr = g_lmrTable[noisy][depth][legalMoves + 1];
-
-			const auto history = noisy
-				? thread.history.noisyScore(move, captured, pos.threats())
-				: thread.history.quietScore(thread.conthist, ply, pos.threats(), moving, move);
-
-			if (!RootNode && bestScore > -ScoreWin && (!PvNode || !thread.datagen))
-			{
-				const auto lmrDepth = std::max(depth - baseLmr / 128, 0);
-
-				if (!noisy)
-				{
-					if (legalMoves >= LmpTable[improving][std::min(depth, 15)])
-					{
-						generator.skipQuiets();
-						continue;
-					}
-
-					if (lmrDepth <= 5
-						&& history < quietHistPruningMargin() * depth + quietHistPruningOffset())
-					{
-						generator.skipQuiets();
-						continue;
-					}
-
-					if (!inCheck
-						&& lmrDepth <= 8
-						&& std::abs(alpha) < 2000
-						&& curr.staticEval + fpMargin() + depth * fpScale() <= alpha)
-					{
-						generator.skipQuiets();
-						continue;
-					}
-				}
-				else if (depth <= 4
-					&& history < noisyHistPruningMargin() * depth * depth + noisyHistPruningOffset())
-					continue;
-
-				const auto seeThreshold = noisy
-					? seePruningThresholdNoisy() * depth
-					: seePruningThresholdQuiet() * lmrDepth * lmrDepth;
-
-				if (quietOrLosing && !see::see(pos, move, seeThreshold))
-					continue;
-			}
-
-			if constexpr (PvNode)
-				curr.pv.length = 0;
-
-			const auto prevNodes = thread.search.loadNodes();
-
-			thread.search.incNodes();
-			++legalMoves;
-
-			if (RootNode
-				&& g_opts.showCurrMove
-				&& elapsed() > CurrmoveReportDelay)
-				std::cout << "info depth " << depth
-					<< " currmove " << uci::moveToString(move)
-					<< " currmovenumber " << legalMoves << std::endl;
-
-			i32 extension{};
-
-			if (!RootNode
-				&& depth >= 8
-				&& move == ttEntry.move
-				&& !curr.excluded
-				&& ttEntry.depth >= depth - 5
-				&& ttEntry.flag != TtFlag::UpperBound)
-			{
-				const auto sBeta = std::max(-ScoreInf + 1, ttEntry.score - depth * sBetaMargin() / 16);
-				const auto sDepth = (depth - 1) / 2;
-
-				curr.excluded = move;
-				const auto score = search(thread, curr.pv, sDepth, ply, moveStackIdx + 1, sBeta - 1, sBeta, cutnode);
-				curr.excluded = NullMove;
-
-				if (score < sBeta)
-				{
-					if (!PvNode && curr.multiExtensions <= multiExtLimit() && score < sBeta - doubleExtMargin())
-						extension = 2 + (!ttMoveNoisy && score < sBeta - tripleExtMargin());
-					else extension = 1;
-				}
-				else if (sBeta >= beta)
-					return sBeta;
-				else if (cutnode)
-					extension = -2;
-				else if (ttEntry.score >= beta)
-					extension = -1;
-			}
-
-			curr.multiExtensions += extension >= 2;
-			cutnode |= extension < 0;
-
-			m_ttable.prefetch(pos.roughKeyAfter(move));
-
-			thread.setMove(ply, move);
-			const auto guard = pos.applyMove(move, &thread.nnueState);
-
-			Score score{};
-
-			if (pos.isBareKingWin())
-				score = -ScoreMate + ply; //TODO correct ply?
-			else if (pos.isDrawn(true))
-				score = drawScore(thread.search.loadNodes());
-			else
-			{
-				auto newDepth = depth + extension - 1;
-
-				if (depth >= 2
-					&& legalMoves >= lmrMinMoves
-					&& quietOrLosing)
-				{
-					auto r = baseLmr;
-
-					r += !PvNode * lmrNonPvReductionScale();
-					r -= ttpv * lmrTtpvReductionScale();
-					r -= history * 128 / lmrHistoryDivisor();
-					r -= improving * lmrImprovingReductionScale();
-					r -= pos.isCheck() * lmrCheckReductionScale();
-					r += cutnode * lmrCutnodeReductionScale();
-
-					if (complexity)
-					{
-						const bool highComplexity = *complexity > lmrHighComplexityThreshold();
-						r -= lmrHighComplexityReductionScale() * highComplexity;
-					}
-
-					r /= 128;
-
-					// can't use std::clamp because newDepth can be <0
-					const auto reduced = std::min(std::max(newDepth - r, 1), newDepth);
-					score = -search(thread, curr.pv, reduced, ply + 1, moveStackIdx + 1, -alpha - 1, -alpha, true);
-
-					if (score > alpha && reduced < newDepth)
-					{
-						const bool doDeeperSearch = score > bestScore + lmrDeeperBase() + lmrDeeperScale() * newDepth;
-						const bool doShallowerSearch = score < bestScore + newDepth;
-
-						newDepth += doDeeperSearch - doShallowerSearch;
-
-						score = -search(thread, curr.pv, newDepth, ply + 1,
-							moveStackIdx + 1, -alpha - 1, -alpha, !cutnode);
-
-						if (!noisy && (score <= alpha || score >= beta))
-						{
-							const auto bonus = score <= alpha ? historyPenalty(newDepth) : historyBonus(newDepth);
-							thread.history.updateConthist(thread.conthist, ply, moving, move, bonus);
-						}
-					}
-				}
-				// if we're skipping LMR for some reason (first move in a non-PV
-				// node, or the conditions above for LMR were not met) then do an
-				// unreduced zero-window search to check if this move can raise alpha
-				else if (!PvNode || legalMoves > 1)
-					score = -search(thread, curr.pv, newDepth, ply + 1,
-						moveStackIdx + 1, -alpha - 1, -alpha, !cutnode);
-
-				// if we're in a PV node and
-				//   - we're searching the first legal move, or
-				//   - alpha was raised by a previous zero-window search,
-				// then do a full-window search to get the true score of this node
-				if (PvNode && (legalMoves == 1 || score > alpha))
-					score = -search<true>(thread, curr.pv, newDepth,
-						ply + 1, moveStackIdx + 1, -beta, -alpha, false);
-			}
-
-			if (hasStopped())
-				return 0;
-
-			if constexpr (RootNode)
-			{
-				if (thread.isMainThread())
-					m_limiter->updateMoveNodes(move, thread.search.loadNodes() - prevNodes);
-			}
-
-			if (score > bestScore)
-				bestScore = score;
-
-			if (score > alpha)
-			{
-				alpha = score;
-				bestMove = move;
-
-				if constexpr (PvNode)
-				{
-					assert(curr.pv.length + 1 <= MaxDepth);
-					pv.update(move, curr.pv);
-				}
-
-				ttFlag = TtFlag::Exact;
-			}
-
-			if (score >= beta)
-			{
-				ttFlag = TtFlag::LowerBound;
-				break;
-			}
-
-			if (move != bestMove)
-			{
-				if (noisy)
-					moveStack.failLowNoisies.push(move);
-				else moveStack.failLowQuiets.push(move);
-			}
-		}
-
-		if (legalMoves == 0)
-			return -ScoreMate + ply;
-
-		if (bestMove)
-		{
-			const auto historyDepth = depth + (curr.staticEval <= alpha);
-
-			const auto bonus = historyBonus(historyDepth);
-			const auto penalty = historyPenalty(historyDepth);
-
-			if (!pos.isNoisy(bestMove))
-			{
-				curr.killers.push(bestMove);
-
-				thread.history.updateQuietScore(thread.conthist, ply, pos.threats(),
-					pos.boards().pieceAt(bestMove.src()), bestMove, bonus);
-
-				for (const auto prevQuiet : moveStack.failLowQuiets)
-				{
-					thread.history.updateQuietScore(thread.conthist, ply, pos.threats(),
-						pos.boards().pieceAt(prevQuiet.src()), prevQuiet, penalty);
-				}
-			}
-			else
-			{
-				const auto captured = pos.captureTarget(bestMove);
-				thread.history.updateNoisyScore(bestMove, captured, pos.threats(), bonus);
-			}
-
-			// unconditionally update capthist
-			for (const auto prevNoisy : moveStack.failLowNoisies)
-			{
-				const auto captured = pos.captureTarget(prevNoisy);
-				thread.history.updateNoisyScore(prevNoisy, captured, pos.threats(), penalty);
-			}
-		}
-
-		if (!curr.excluded)
-		{
-			if (!inCheck
-				&& (bestMove.isNull() || !pos.isNoisy(bestMove))
-				&& (ttFlag == TtFlag::Exact
-					|| ttFlag == TtFlag::UpperBound && bestScore < curr.staticEval
-					|| ttFlag == TtFlag::LowerBound && bestScore > curr.staticEval))
-				thread.correctionHistory.update(pos, thread.contMoves, ply, depth, bestScore, curr.staticEval);
-
-			m_ttable.put(pos.key(), bestScore, rawStaticEval, bestMove, depth, ply, ttFlag, ttpv);
-		}
-
-		return bestScore;
-	}
-
-	template <bool PvNode>
-	auto Searcher::qsearch(ThreadData &thread, i32 ply, u32 moveStackIdx, Score alpha, Score beta) -> Score
-	{
-		assert(ply > 0 && ply <= MaxDepth);
-
-		if (checkHardTimeout(thread.search, thread.isMainThread()))
-			return 0;
-
-		auto &pos = thread.pos;
-
-		if (alpha < 0 && pos.hasCycle(ply))
-		{
-			alpha = drawScore(thread.search.loadNodes());
-			if (alpha >= beta)
-				return alpha;
-		}
-
-		const bool inCheck = pos.isCheck();
-
-		if constexpr (PvNode)
-			thread.search.updateSeldepth(ply + 1);
-
-		thread.clearContMove(ply);
-
-		if (ply >= MaxDepth)
-			return inCheck ? 0
-				: eval::adjustedStaticEval(pos, thread.contMoves, ply,
-					thread.nnueState, &thread.correctionHistory, m_contempt);
-
-		ProbedTTableEntry ttEntry{};
-		const bool ttHit = m_ttable.probe(ttEntry, pos.key(), ply);
-
-		if (!PvNode
-			&& (ttEntry.flag == TtFlag::Exact
-				|| ttEntry.flag == TtFlag::UpperBound && ttEntry.score <= alpha
-				|| ttEntry.flag == TtFlag::LowerBound && ttEntry.score >= beta))
-			return ttEntry.score;
-
-		const bool ttpv = PvNode || ttEntry.wasPv;
-
-		Score rawStaticEval, eval;
-
-		if (inCheck)
-		{
-			rawStaticEval = ScoreNone;
-			eval = -ScoreMate + ply;
-		}
-		else
-		{
-			if (ttHit && ttEntry.staticEval != ScoreNone)
-				rawStaticEval = ttEntry.staticEval;
-			else rawStaticEval = eval::staticEval(pos, thread.nnueState, m_contempt);
-
-			if (!ttHit)
-				m_ttable.put(pos.key(), ScoreNone, rawStaticEval, NullMove, 0, 0, TtFlag::None, ttpv);
-
-			const auto staticEval = eval::adjustEval(pos, thread.contMoves,
-				ply, &thread.correctionHistory, rawStaticEval);
-
-			if (ttEntry.flag == TtFlag::Exact
-				|| ttEntry.flag == TtFlag::UpperBound && ttEntry.score < staticEval
-				|| ttEntry.flag == TtFlag::LowerBound && ttEntry.score > staticEval)
-				eval = ttEntry.score;
-			else eval = staticEval;
-
-			if (eval >= beta)
-				return eval;
-
-			if (eval > alpha)
-				alpha = eval;
-		}
-
-		const auto futility = eval + qsearchFpMargin();
-
-		auto bestMove = NullMove;
-		auto bestScore = eval;
-
-		auto ttFlag = TtFlag::UpperBound;
-
-		auto generator = MoveGenerator::qsearch(pos, thread.moveStack[moveStackIdx].movegenData,
-			ttEntry.move, thread.history, thread.conthist, ply);
-
-		u32 legalMoves = 0;
-
-		while (const auto move = generator.next())
-		{
-			if (!pos.isLegal(move))
-				continue;
-
-			if (bestScore > -ScoreWin)
-			{
-				if (!inCheck
-					&& futility <= alpha
-					&& !see::see(pos, move, 1))
-				{
-					if (bestScore < futility)
-						bestScore = futility;
-					continue;
-				}
-
-				if (legalMoves >= 2)
-					break;
-
-				if (!see::see(pos, move, qsearchSeeThreshold()))
-					continue;
-			}
-
-			++legalMoves;
-
-			thread.search.incNodes();
-
-			m_ttable.prefetch(pos.roughKeyAfter(move));
-
-			thread.setMove(ply, move);
-			const auto guard = pos.applyMove(move, &thread.nnueState);
-
-			const auto score = [&]
-			{
-				if (pos.isBareKingWin())
-					return -ScoreMate + ply;
-				else if (pos.isDrawn(false))
-					return drawScore(thread.search.loadNodes());
-
-				return -qsearch(thread, ply + 1, moveStackIdx + 1, -beta, -alpha);
-			}();
-
-			if (hasStopped())
-				return 0;
-
-			if (score > -ScoreWin)
-				generator.skipQuiets();
-
-			if (score > bestScore)
-				bestScore = score;
-
-			if (score > alpha)
-			{
-				alpha = score;
-				bestMove = move;
-
-				ttFlag = TtFlag::Exact;
-			}
-
-			if (score >= beta)
-			{
-				ttFlag = TtFlag::LowerBound;
-				break;
-			}
-		}
-
-		// stalemate not handled
-		if (inCheck && legalMoves == 0)
-			return -ScoreMate + ply;
-
-		m_ttable.put(pos.key(), bestScore, rawStaticEval, bestMove, 0, ply, ttFlag, ttpv);
-
-		return bestScore;
-	}
-
-	auto Searcher::report(const ThreadData &mainThread, const PvList &pv,
-		i32 depth, f64 time, Score score, Score alpha, Score beta) -> void
-	{
-		usize nodes = 0;
-		i32 seldepth = 0;
-
-		// technically a potential race but it doesn't matter
-		for (const auto &thread : m_threads)
-		{
-			nodes += thread.search.loadNodes();
-			seldepth = std::max(seldepth, thread.search.loadSeldepth());
-		}
-
-		const auto ms  = static_cast<usize>(time * 1000.0);
-		const auto nps = static_cast<usize>(static_cast<f64>(nodes) / time);
-
-		std::cout << "info depth " << depth << " seldepth " << seldepth
-			<< " time " << ms << " nodes " << nodes << " nps " << nps << " score ";
-
-		const bool upperbound = score <= alpha;
-		const bool lowerbound = score >= beta;
-
-		if (std::abs(score) <= 2) // draw score
-			score = 0;
-
-		score = std::clamp(score, alpha, beta);
-		score = std::clamp(score, m_minRootScore, m_maxRootScore);
-
-		const auto material = mainThread.pos.classicalMaterial();
-
-		// mates
-		if (std::abs(score) >= ScoreMaxMate)
-		{
-			if (score > 0)
-				std::cout << "mate " << ((ScoreMate - score + 1) / 2);
-			else std::cout << "mate " << (-(ScoreMate + score) / 2);
-		}
-		else
-		{
-			// adjust score to 100cp == 50% win probability
-			const auto normScore = wdl::normalizeScore(score, material);
-			std::cout << "cp " << normScore;
-		}
-
-		if (upperbound)
-			std::cout << " upperbound";
-		if (lowerbound)
-			std::cout << " lowerbound";
-
-		// wdl display
-		if (g_opts.showWdl)
-		{
-			if (score > ScoreWin)
-				std::cout << " wdl 1000 0 0";
-			else if (score < -ScoreWin)
-				std::cout << " wdl 0 0 1000";
-			else
-			{
-				const auto [wdlWin, wdlLoss] = wdl::wdlModel(score, material);
-				const auto wdlDraw = 1000 - wdlWin - wdlLoss;
-
-				std::cout << " wdl " << wdlWin << " " << wdlDraw << " " << wdlLoss;
-			}
-		}
-
-		std::cout << " hashfull " << m_ttable.full();
-
-		std::cout << " pv";
-
-		for (u32 i = 0; i < pv.length; ++i)
-		{
-			std::cout << ' ' << uci::moveToString(pv.moves[i]);
-		}
-
-		std::cout << std::endl;
-	}
-
-	auto Searcher::finalReport(const ThreadData &mainThread,
-		const PvList &pv, i32 depthCompleted, f64 time, Score score) -> void
-	{
-		report(mainThread, pv, depthCompleted, time, score);
-		std::cout << "bestmove " << uci::moveToString(pv.moves[0]) << std::endl;
-	}
-}
+            if (!kPvNode && ttEntry.depth >= depth && (ttEntry.score <= alpha || cutnode)) {
+                if (ttEntry.flag == TtFlag::kExact                                   //
+                    || ttEntry.flag == TtFlag::kUpperBound && ttEntry.score <= alpha //
+                    || ttEntry.flag == TtFlag::kLowerBound && ttEntry.score >= beta)
+                {
+                    if (ttEntry.score >= beta && ttEntry.move && !pos.isNoisy(ttEntry.move)
+                        && pos.isPseudolegal(ttEntry.move))
+                    {
+                        const auto bonus = historyBonus(depth);
+                        thread.history.updateQuietScore(
+                            thread.conthist,
+                            ply,
+                            pos.threats(),
+                            boards.pieceOn(ttEntry.move.fromSq()),
+                            ttEntry.move,
+                            bonus
+                        );
+                    }
+
+                    return ttEntry.score;
+                } else if (depth <= 6) {
+                    ++depth;
+                }
+            }
+        }
+
+        const auto ttMove =
+            (kRootNode && thread.search.rootDepth > 1) ? thread.rootMoves[thread.pvIdx].pv.moves[0] : ttEntry.move;
+
+        const bool ttMoveNoisy = ttMove && pos.isNoisy(ttMove);
+        const bool ttpv = kPvNode || ttEntry.wasPv;
+
+        if (depth >= 3 && !curr.excluded && (kPvNode || cutnode) && (!ttMove || ttEntry.depth + 3 < depth)) {
+            --depth;
+        }
+
+        Score rawStaticEval{};
+        std::optional<Score> complexity{};
+
+        if (!curr.excluded) {
+            if (inCheck) {
+                rawStaticEval = kScoreNone;
+            } else if (ttHit && ttEntry.staticEval != kScoreNone) {
+                rawStaticEval = ttEntry.staticEval;
+            } else {
+                rawStaticEval = eval::staticEval(pos, thread.nnueState, m_contempt);
+            }
+
+            if (!ttHit) {
+                m_ttable.put(pos.key(), kScoreNone, rawStaticEval, kNullMove, 0, 0, TtFlag::kNone, ttpv);
+            }
+
+            if (inCheck) {
+                curr.staticEval = kScoreNone;
+            } else {
+                Score corrDelta{};
+                curr.staticEval =
+                    eval::adjustEval(pos, thread.contMoves, ply, &thread.correctionHistory, rawStaticEval, &corrDelta);
+                complexity = corrDelta;
+            }
+        }
+
+        const bool improving = [&] {
+            if (inCheck) {
+                return false;
+            }
+            if (ply > 1 && thread.stack[ply - 2].staticEval != kScoreNone) {
+                return curr.staticEval > thread.stack[ply - 2].staticEval;
+            }
+            if (ply > 3 && thread.stack[ply - 4].staticEval != kScoreNone) {
+                return curr.staticEval > thread.stack[ply - 4].staticEval;
+            }
+            return true;
+        }();
+
+        if (!kPvNode && !inCheck && !curr.excluded) {
+            if (parent->reduction >= 3 && parent->staticEval != kScoreNone && curr.staticEval + parent->staticEval <= 0)
+            {
+                ++depth;
+            }
+
+            const auto rfpMargin = [&] {
+                auto margin = tunable::rfpMargin() * std::max(depth - improving, 0);
+                if (complexity) {
+                    margin += *complexity * rfpCorrplexityScale() / 128;
+                }
+                return margin;
+            };
+
+            if (depth <= 6 && curr.staticEval - rfpMargin() >= beta) {
+                return !isWin(curr.staticEval) && !isWin(beta) ? (curr.staticEval + beta) / 2 : curr.staticEval;
+            }
+
+            if (depth <= 4 && std::abs(alpha) < 2000 && curr.staticEval + razoringMargin() * depth <= alpha) {
+                const auto score = qsearch(thread, pos, ply, moveStackIdx, alpha, alpha + 1);
+                if (score <= alpha) {
+                    return score;
+                }
+            }
+
+            if (depth >= 4 && ply >= thread.minNmpPly && curr.staticEval >= beta && !parent->move.isNull()
+                && !(ttEntry.flag == TtFlag::kUpperBound && ttEntry.score < beta) && !bbs.nonPk(us).empty())
+            {
+                m_ttable.prefetch(pos.key() ^ keys::color());
+
+                const auto R =
+                    4 + depth / 5 + std::min((curr.staticEval - beta) / nmpEvalReductionScale(), 2) + improving;
+
+                const auto score = [&] {
+                    const auto [newPos, guard] = thread.applyNullmove(pos, ply);
+                    return -search(
+                        thread,
+                        newPos,
+                        curr.pv,
+                        depth - R,
+                        ply + 1,
+                        moveStackIdx,
+                        -beta,
+                        -beta + 1,
+                        !cutnode
+                    );
+                }();
+
+                if (score >= beta) {
+                    if (depth <= 14 || thread.minNmpPly > 0) {
+                        return score > kScoreWin ? beta : score;
+                    }
+
+                    thread.minNmpPly = ply + (depth - R) * 3 / 4;
+
+                    const auto verifScore =
+                        search(thread, pos, curr.pv, depth - R, ply, moveStackIdx + 1, beta - 1, beta, true);
+
+                    thread.minNmpPly = 0;
+
+                    if (verifScore >= beta) {
+                        return verifScore;
+                    }
+                }
+            }
+
+            const auto probcutBeta = beta + probcutMargin();
+            const auto probcutDepth = std::max(depth - 3, 1);
+
+            if (!ttpv && depth >= 7 && std::abs(beta) < kScoreWin && (!ttMove || ttMoveNoisy)
+                && !(ttHit && ttEntry.depth >= probcutDepth && ttEntry.score < probcutBeta))
+            {
+                const auto seeThreshold = (probcutBeta - curr.staticEval) * probcutSeeScale() / 16;
+
+                auto generator = MoveGenerator::probcut(pos, ttMove, moveStack.movegenData, thread.history);
+
+                while (const auto move = generator.next()) {
+                    if (!pos.isLegal(move)) {
+                        continue;
+                    }
+
+                    if (!see::see(pos, move, seeThreshold)) {
+                        continue;
+                    }
+
+                    thread.search.incNodes();
+
+                    m_ttable.prefetch(pos.roughKeyAfter(move));
+
+                    const auto [newPos, guard] = thread.applyMove(pos, ply, move);
+
+                    auto score = -qsearch(thread, newPos, ply + 1, moveStackIdx + 1, -probcutBeta, -probcutBeta + 1);
+
+                    if (score >= probcutBeta) {
+                        score = -search(
+                            thread,
+                            newPos,
+                            curr.pv,
+                            probcutDepth - 1,
+                            ply + 1,
+                            moveStackIdx + 1,
+                            -probcutBeta,
+                            -probcutBeta + 1,
+                            !cutnode
+                        );
+                    }
+
+                    if (hasStopped()) {
+                        return 0;
+                    }
+
+                    if (score >= probcutBeta) {
+                        m_ttable.put(
+                            pos.key(),
+                            score,
+                            curr.staticEval,
+                            move,
+                            probcutDepth,
+                            ply,
+                            TtFlag::kLowerBound,
+                            false
+                        );
+                        return score;
+                    }
+                }
+            }
+        }
+
+        thread.stack[ply + 1].killers.clear();
+
+        moveStack.failLowQuiets.clear();
+        moveStack.failLowNoisies.clear();
+
+        auto bestMove = kNullMove;
+        auto bestScore = -kScoreInf;
+
+        auto ttFlag = TtFlag::kUpperBound;
+
+        auto generator =
+            MoveGenerator::main(pos, moveStack.movegenData, ttMove, curr.killers, thread.history, thread.conthist, ply);
+
+        u32 legalMoves = 0;
+
+        while (const auto move = generator.next()) {
+            if (move == curr.excluded) {
+                continue;
+            }
+
+            if constexpr (kRootNode) {
+                if (!thread.isLegalRootMove(move)) {
+                    continue;
+                }
+
+                assert(pos.isLegal(move));
+            } else if (!pos.isLegal(move)) {
+                continue;
+            }
+
+            const bool quietOrLosing = generator.stage() > MovegenStage::kGoodNoisy;
+
+            const bool noisy = pos.isNoisy(move);
+            const auto moving = boards.pieceOn(move.fromSq());
+
+            const auto captured = pos.captureTarget(move);
+
+            const auto baseLmr = g_lmrTable[noisy][depth][legalMoves + 1];
+
+            const auto history = noisy ? thread.history.noisyScore(move, captured, pos.threats())
+                                       : thread.history.quietScore(thread.conthist, ply, pos.threats(), moving, move);
+
+            if ((!kRootNode || thread.search.rootDepth == 1) && bestScore > -kScoreWin && (!kPvNode || !thread.datagen))
+            {
+                const auto lmrDepth = std::max(depth - baseLmr / 128, 0);
+
+                if (!noisy) {
+                    if (legalMoves >= kLmpTable[improving][std::min(depth, 15)]) {
+                        generator.skipQuiets();
+                        continue;
+                    }
+
+                    if (lmrDepth <= 5 && history < quietHistPruningMargin() * depth + quietHistPruningOffset()) {
+                        generator.skipQuiets();
+                        continue;
+                    }
+
+                    if (!inCheck && lmrDepth <= 8 && std::abs(alpha) < 2000
+                        && curr.staticEval + fpMargin() + depth * fpScale() <= alpha)
+                    {
+                        generator.skipQuiets();
+                        continue;
+                    }
+                } else if (depth <= 4 && history < noisyHistPruningMargin() * depth * depth + noisyHistPruningOffset())
+                {
+                    continue;
+                }
+
+                const auto seeThreshold =
+                    noisy ? seePruningThresholdNoisy() * depth : seePruningThresholdQuiet() * lmrDepth * lmrDepth;
+
+                if (quietOrLosing && !see::see(pos, move, seeThreshold)) {
+                    continue;
+                }
+            }
+
+            if constexpr (kPvNode) {
+                curr.pv.length = 0;
+            }
+
+            const auto prevNodes = thread.search.loadNodes();
+
+            thread.search.incNodes();
+            ++legalMoves;
+
+            if (kRootNode && g_opts.showCurrMove && elapsed() > kCurrmoveReportDelay) {
+                println("info depth {} currmove {} currmovenumber {}", depth, move, legalMoves);
+            }
+
+            i32 extension{};
+
+            if (!kRootNode && ply < thread.search.rootDepth * 2 && move == ttMove && !curr.excluded) {
+                if (depth >= 8 && ttEntry.depth >= depth - 5 && ttEntry.flag != TtFlag::kUpperBound
+                    && !isWin(ttEntry.score))
+                {
+                    const auto sBeta = ttEntry.score - depth * sBetaMargin() / 16;
+                    const auto sDepth = (depth - 1) / 2;
+
+                    curr.excluded = move;
+
+                    const auto score =
+                        search(thread, pos, curr.pv, sDepth, ply, moveStackIdx + 1, sBeta - 1, sBeta, cutnode);
+
+                    curr.excluded = kNullMove;
+
+                    if (score < sBeta) {
+                        if (!kPvNode && score < sBeta - doubleExtMargin()) {
+                            extension = 2 + (!ttMoveNoisy && score < sBeta - tripleExtMargin());
+                        } else {
+                            extension = 1;
+                        }
+                    } else if (sBeta >= beta) {
+                        return sBeta;
+                    } else if (cutnode) {
+                        extension = -2;
+                    } else if (ttEntry.score >= beta) {
+                        extension = -1;
+                    }
+                } else if (depth <= 7 && !inCheck && curr.staticEval <= alpha - ldseMargin()
+                           && ttEntry.flag == TtFlag::kLowerBound)
+                {
+                    extension = 1;
+                }
+            }
+
+            cutnode |= extension < 0;
+
+            m_ttable.prefetch(pos.roughKeyAfter(move));
+
+            const auto [newPos, guard] = thread.applyMove(pos, ply, move);
+
+            const bool givesCheck = newPos.isCheck();
+
+            Score score{};
+
+            if (newPos.isBareKingWin()) {
+                score = -kScoreMate + ply; // TODO correct ply?
+            } else if (newPos.isDrawn(ply, thread.keyHistory)) {
+                score = drawScore(thread.search.loadNodes());
+            } else {
+                auto newDepth = depth + extension - 1;
+
+                if (depth >= 2 && legalMoves >= 2 + kRootNode) {
+                    auto r = baseLmr;
+
+                    r += !kPvNode * lmrNonPvReductionScale();
+                    r -= ttpv * lmrTtpvReductionScale();
+                    r -= history * 128 / (noisy ? lmrNoisyHistoryDivisor() : lmrQuietHistoryDivisor());
+                    r -= improving * lmrImprovingReductionScale();
+                    r -= givesCheck * lmrCheckReductionScale();
+                    r += cutnode * lmrCutnodeReductionScale();
+                    r += (ttpv && ttHit && ttEntry.score <= alpha) * lmrTtpvFailLowReductionScale();
+
+                    if (complexity) {
+                        const bool highComplexity = *complexity > lmrHighComplexityThreshold();
+                        r -= lmrHighComplexityReductionScale() * highComplexity;
+                    }
+
+                    r /= 128;
+
+                    // can't use std::clamp because newDepth can be <0
+                    const auto reduced = std::min(std::max(newDepth - r, 1), newDepth);
+
+                    curr.reduction = newDepth - reduced;
+                    score =
+                        -search(thread, newPos, curr.pv, reduced, ply + 1, moveStackIdx + 1, -alpha - 1, -alpha, true);
+                    curr.reduction = 0;
+
+                    if (score > alpha && reduced < newDepth) {
+                        const bool doDeeperSearch = score > bestScore + lmrDeeperBase() + lmrDeeperScale() * newDepth;
+                        const bool doShallowerSearch = score < bestScore + newDepth;
+
+                        newDepth += doDeeperSearch - doShallowerSearch;
+
+                        score = -search(
+                            thread,
+                            newPos,
+                            curr.pv,
+                            newDepth,
+                            ply + 1,
+                            moveStackIdx + 1,
+                            -alpha - 1,
+                            -alpha,
+                            !cutnode
+                        );
+
+                        if (!noisy && (score <= alpha || score >= beta)) {
+                            const auto bonus = score <= alpha ? historyPenalty(newDepth) : historyBonus(newDepth);
+                            thread.history.updateConthist(thread.conthist, ply, moving, move, bonus);
+                        }
+                    }
+                }
+                // if we're skipping LMR for some reason (first move in a non-PV
+                // node, or the conditions above for LMR were not met) then do an
+                // unreduced zero-window search to check if this move can raise alpha
+                else if (!kPvNode || legalMoves > 1)
+                {
+                    score = -search(
+                        thread,
+                        newPos,
+                        curr.pv,
+                        newDepth,
+                        ply + 1,
+                        moveStackIdx + 1,
+                        -alpha - 1,
+                        -alpha,
+                        !cutnode
+                    );
+                }
+
+                // if we're in a PV node and
+                //   - we're searching the first legal move, or
+                //   - alpha was raised by a previous zero-window search,
+                // then do a full-window search to get the true score of this node
+                if (kPvNode && (legalMoves == 1 || score > alpha)) {
+                    score = -search<
+                        true>(thread, newPos, curr.pv, newDepth, ply + 1, moveStackIdx + 1, -beta, -alpha, false);
+                }
+            }
+
+            if (hasStopped()) {
+                return 0;
+            }
+
+            if constexpr (kRootNode) {
+                if (thread.isMainThread()) {
+                    m_limiter->updateMoveNodes(move, thread.search.loadNodes() - prevNodes);
+                }
+
+                auto* rootMove = thread.findRootMove(move);
+
+                if (!rootMove) {
+                    eprintln("Failed to find root move for {}", move);
+                    std::terminate();
+                }
+
+                if (legalMoves == 1 || score > alpha) {
+                    rootMove->seldepth = thread.search.loadSeldepth();
+
+                    rootMove->displayScore = score;
+                    rootMove->score = score;
+
+                    rootMove->upperbound = false;
+                    rootMove->lowerbound = false;
+
+                    if (score <= alpha) {
+                        rootMove->displayScore = alpha;
+                        rootMove->upperbound = true;
+                    } else if (score >= beta) {
+                        rootMove->displayScore = beta;
+                        rootMove->lowerbound = true;
+                    }
+
+                    rootMove->pv.update(move, curr.pv);
+                } else {
+                    rootMove->score = -kScoreInf;
+                }
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+            }
+
+            if (score > alpha) {
+                alpha = score;
+                bestMove = move;
+
+                if constexpr (kPvNode) {
+                    assert(curr.pv.length + 1 <= kMaxDepth);
+                    pv.update(move, curr.pv);
+                }
+
+                ttFlag = TtFlag::kExact;
+            }
+
+            if (score >= beta) {
+                ttFlag = TtFlag::kLowerBound;
+                break;
+            }
+
+            if (move != bestMove) {
+                if (noisy) {
+                    moveStack.failLowNoisies.push(move);
+                } else {
+                    moveStack.failLowQuiets.push(move);
+                }
+            }
+        }
+
+        if (legalMoves == 0) {
+            if (curr.excluded) {
+                return alpha;
+            }
+            return -kScoreMate + ply;
+        }
+
+        if (bestMove) {
+            const auto historyDepth = depth + (curr.staticEval <= bestScore);
+
+            const auto bonus = historyBonus(historyDepth);
+            const auto penalty = historyPenalty(historyDepth);
+
+            if (!pos.isNoisy(bestMove)) {
+                curr.killers.push(bestMove);
+
+                thread.history.updateQuietScore(
+                    thread.conthist,
+                    ply,
+                    pos.threats(),
+                    pos.boards().pieceOn(bestMove.fromSq()),
+                    bestMove,
+                    bonus
+                );
+
+                for (const auto prevQuiet : moveStack.failLowQuiets) {
+                    thread.history.updateQuietScore(
+                        thread.conthist,
+                        ply,
+                        pos.threats(),
+                        pos.boards().pieceOn(prevQuiet.fromSq()),
+                        prevQuiet,
+                        penalty
+                    );
+                }
+            } else {
+                const auto captured = pos.captureTarget(bestMove);
+                thread.history.updateNoisyScore(bestMove, captured, pos.threats(), bonus);
+            }
+
+            // unconditionally update capthist
+            for (const auto prevNoisy : moveStack.failLowNoisies) {
+                const auto captured = pos.captureTarget(prevNoisy);
+                thread.history.updateNoisyScore(prevNoisy, captured, pos.threats(), penalty);
+            }
+        }
+
+        if (bestScore >= beta && !isWin(bestScore) && !isWin(beta)) {
+            bestScore = (bestScore * depth + beta) / (depth + 1);
+        }
+
+        if (!curr.excluded) {
+            if (!inCheck && (bestMove.isNull() || !pos.isNoisy(bestMove))
+                && (ttFlag == TtFlag::kExact                                        //
+                    || ttFlag == TtFlag::kUpperBound && bestScore < curr.staticEval //
+                    || ttFlag == TtFlag::kLowerBound && bestScore > curr.staticEval))
+            {
+                thread.correctionHistory.update(pos, thread.contMoves, ply, depth, bestScore, curr.staticEval);
+            }
+
+            if (!kRootNode || thread.pvIdx == 0) {
+                m_ttable.put(pos.key(), bestScore, rawStaticEval, bestMove, depth, ply, ttFlag, ttpv);
+            }
+        }
+
+        return bestScore;
+    }
+
+    template <bool kPvNode>
+    Score Searcher::qsearch(
+        ThreadData& thread,
+        const Position& pos,
+        i32 ply,
+        u32 moveStackIdx,
+        Score alpha,
+        Score beta
+    ) {
+        assert(ply > 0 && ply <= kMaxDepth);
+
+        if (checkHardTimeout(thread.search, thread.isMainThread())) {
+            return 0;
+        }
+
+        if (alpha < 0 && pos.hasCycle(ply, thread.keyHistory)) {
+            alpha = drawScore(thread.search.loadNodes());
+            if (alpha >= beta) {
+                return alpha;
+            }
+        }
+
+        const bool inCheck = pos.isCheck();
+
+        if constexpr (kPvNode) {
+            thread.search.updateSeldepth(ply + 1);
+        }
+
+        if (ply >= kMaxDepth) {
+            return inCheck ? 0
+                           : eval::adjustedStaticEval(
+                                 pos,
+                                 thread.contMoves,
+                                 ply,
+                                 thread.nnueState,
+                                 &thread.correctionHistory,
+                                 m_contempt
+                             );
+        }
+
+        ProbedTTableEntry ttEntry{};
+        const bool ttHit = m_ttable.probe(ttEntry, pos.key(), ply);
+
+        if (!kPvNode
+            && (ttEntry.flag == TtFlag::kExact                                   //
+                || ttEntry.flag == TtFlag::kUpperBound && ttEntry.score <= alpha //
+                || ttEntry.flag == TtFlag::kLowerBound && ttEntry.score >= beta))
+        {
+            return ttEntry.score;
+        }
+
+        const bool ttpv = kPvNode || ttEntry.wasPv;
+
+        Score rawStaticEval, eval;
+
+        if (inCheck) {
+            rawStaticEval = kScoreNone;
+            eval = -kScoreMate + ply;
+        } else {
+            if (ttHit && ttEntry.staticEval != kScoreNone) {
+                rawStaticEval = ttEntry.staticEval;
+            } else {
+                rawStaticEval = eval::staticEval(pos, thread.nnueState, m_contempt);
+            }
+
+            if (!ttHit) {
+                m_ttable.put(pos.key(), kScoreNone, rawStaticEval, kNullMove, 0, 0, TtFlag::kNone, ttpv);
+            }
+
+            const auto staticEval =
+                eval::adjustEval(pos, thread.contMoves, ply, &thread.correctionHistory, rawStaticEval);
+
+            if (ttEntry.flag == TtFlag::kExact                                       //
+                || ttEntry.flag == TtFlag::kUpperBound && ttEntry.score < staticEval //
+                || ttEntry.flag == TtFlag::kLowerBound && ttEntry.score > staticEval)
+            {
+                eval = ttEntry.score;
+            } else {
+                eval = staticEval;
+            }
+
+            if (eval >= beta) {
+                return !isWin(eval) && !isWin(beta) ? (eval + beta) / 2 : eval;
+            }
+
+            if (eval > alpha) {
+                alpha = eval;
+            }
+        }
+
+        const auto futility = eval + qsearchFpMargin();
+
+        auto bestMove = kNullMove;
+        auto bestScore = eval;
+
+        auto ttFlag = TtFlag::kUpperBound;
+
+        auto generator = MoveGenerator::qsearch(
+            pos,
+            thread.moveStack[moveStackIdx].movegenData,
+            ttEntry.move,
+            thread.history,
+            thread.conthist,
+            ply
+        );
+
+        u32 legalMoves = 0;
+
+        while (const auto move = generator.next()) {
+            if (!pos.isLegal(move)) {
+                continue;
+            }
+
+            if (bestScore > -kScoreWin) {
+                if (!inCheck && futility <= alpha && !see::see(pos, move, 1)) {
+                    if (bestScore < futility) {
+                        bestScore = futility;
+                    }
+                    continue;
+                }
+
+                if (legalMoves >= 2) {
+                    break;
+                }
+
+                if (!see::see(pos, move, qsearchSeeThreshold())) {
+                    continue;
+                }
+            }
+
+            ++legalMoves;
+
+            thread.search.incNodes();
+
+            m_ttable.prefetch(pos.roughKeyAfter(move));
+
+            const auto [newPos, guard] = thread.applyMove(pos, ply, move);
+
+            Score score;
+
+            if (newPos.isBareKingWin()) {
+                score = -kScoreMate + ply;
+            } else if (newPos.isDrawn(ply, thread.keyHistory)) {
+                score = drawScore(thread.search.loadNodes());
+            } else {
+                score = -qsearch<kPvNode>(thread, newPos, ply + 1, moveStackIdx + 1, -beta, -alpha);
+            }
+
+            if (hasStopped()) {
+                return 0;
+            }
+
+            if (score > -kScoreWin) {
+                generator.skipQuiets();
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+            }
+
+            if (score > alpha) {
+                alpha = score;
+                bestMove = move;
+
+                ttFlag = TtFlag::kExact;
+            }
+
+            if (score >= beta) {
+                ttFlag = TtFlag::kLowerBound;
+                break;
+            }
+        }
+
+        if (legalMoves == 0) {
+            return -kScoreMate + ply;
+        }
+
+        m_ttable.put(pos.key(), bestScore, rawStaticEval, bestMove, 0, ply, ttFlag, ttpv);
+
+        return bestScore;
+    }
+
+    void Searcher::reportSingle(const ThreadData& thread, u32 pvIdx, i32 depth, f64 time) {
+        const auto& move = thread.rootMoves[pvIdx];
+
+        auto score = move.score == -kScoreInf ? move.displayScore : move.score;
+        depth = move.score == -kScoreInf ? std::max(1, depth - 1) : depth;
+
+        usize nodes = 0;
+
+        for (const auto& worker : m_threadData) {
+            nodes += worker->search.loadNodes();
+        }
+
+        const auto ms = static_cast<usize>(time * 1000.0);
+        const auto nps = static_cast<usize>(static_cast<f64>(nodes) / time);
+
+        print("info ");
+
+        if (g_opts.multiPv > 1) {
+            print("multipv {} ", pvIdx + 1);
+        }
+
+        print("depth {} seldepth {} time {} nodes {} nps {} score ", depth, move.seldepth, ms, nodes, nps);
+
+        if (std::abs(score) <= 2) { // draw score
+            score = 0;
+        }
+
+        if (pvIdx == 0) {
+            score = std::clamp(score, m_minRootScore, m_maxRootScore);
+        }
+
+        const auto material = thread.rootPos.classicalMaterial();
+
+        // mates
+        if (std::abs(score) >= kScoreMaxMate) {
+            if (score > 0) {
+                print("mate {}", (kScoreMate - score + 1) / 2);
+            } else {
+                print("mate {}", -(kScoreMate + score) / 2);
+            }
+        } else {
+            // adjust score to 100cp == 50% win probability
+            const auto normScore = wdl::normalizeScore(score, material);
+            print("cp {}", normScore);
+        }
+
+        if (move.upperbound) {
+            print(" upperbound");
+        }
+
+        if (move.lowerbound) {
+            print(" lowerbound");
+        }
+
+        // wdl display
+        if (g_opts.showWdl) {
+            if (score > kScoreWin) {
+                print(" wdl 1000 0 0");
+            } else if (score < -kScoreWin) {
+                print(" wdl 0 0 1000");
+            } else {
+                const auto [wdlWin, wdlLoss] = wdl::wdlModel(score, material);
+                const auto wdlDraw = 1000 - wdlWin - wdlLoss;
+
+                print(" wdl {} {} {}", wdlWin, wdlDraw, wdlLoss);
+            }
+        }
+
+        print(" hashfull {}", m_ttable.full());
+
+        print(" pv");
+
+        for (u32 i = 0; i < move.pv.length; ++i) {
+            print(" {}", move.pv.moves[i]);
+        }
+
+        println();
+    }
+
+    void Searcher::report(const ThreadData& thread, i32 depth, f64 time) {
+        for (u32 pvIdx = 0; pvIdx < m_multiPv; ++pvIdx) {
+            reportSingle(thread, pvIdx, depth, time);
+        }
+    }
+
+    const ThreadData& Searcher::selectThread() {
+        return *m_threadData[0];
+    }
+
+    void Searcher::finalReport() {
+        const auto& bestThread = selectThread();
+
+        report(bestThread, bestThread.depthCompleted, elapsed());
+        println("bestmove {}", bestThread.pvMove().pv.moves[0]);
+    }
+} // namespace oranj::search

@@ -23,161 +23,149 @@
 #include <array>
 #include <cassert>
 
-#include "../core.h"
 #include "../bitboard.h"
-#include "util.h"
+#include "../core.h"
 #include "../util/bits.h"
+#include "util.h"
 
 #if OJ_HAS_BMI2
-#include "bmi2/attacks.h"
+    #include "bmi2/attacks.h"
 #else
-#include "black_magic/attacks.h"
+    #include "black_magic/attacks.h"
 #endif
 
-namespace oranj::attacks
-{
-	constexpr auto AlfilAttacks = []
-	{
-		std::array<Bitboard, 64> dst{};
+namespace oranj::attacks {
+    constexpr auto kAlfilAttacks = [] {
+        std::array<Bitboard, 64> dst{};
 
-		for (usize i = 0; i < dst.size(); ++i)
-		{
-			const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
+        for (usize i = 0; i < dst.size(); ++i) {
+            const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
 
-			auto &attacks = dst[i];
+            auto& attacks = dst[i];
 
-			attacks |= bit.shiftUpLeft().shiftUpLeft();
-			attacks |= bit.shiftUpRight().shiftUpRight();
-			attacks |= bit.shiftDownLeft().shiftDownLeft();
-			attacks |= bit.shiftDownRight().shiftDownRight();
-		}
+            attacks |= bit.shiftUpLeft().shiftUpLeft();
+            attacks |= bit.shiftUpRight().shiftUpRight();
+            attacks |= bit.shiftDownLeft().shiftDownLeft();
+            attacks |= bit.shiftDownRight().shiftDownRight();
+        }
 
-		return dst;
-	}();
+        return dst;
+    }();
 
-	constexpr auto FerzAttacks = []
-	{
-		std::array<Bitboard, 64> dst{};
+    constexpr auto kFerzAttacks = [] {
+        std::array<Bitboard, 64> dst{};
 
-		for (usize i = 0; i < dst.size(); ++i)
-		{
-			const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
+        for (usize i = 0; i < dst.size(); ++i) {
+            const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
 
-			auto &attacks = dst[i];
+            auto& attacks = dst[i];
 
-			attacks |= bit.shiftUpLeft();
-			attacks |= bit.shiftUpRight();
-			attacks |= bit.shiftDownLeft();
-			attacks |= bit.shiftDownRight();
-		}
+            attacks |= bit.shiftUpLeft();
+            attacks |= bit.shiftUpRight();
+            attacks |= bit.shiftDownLeft();
+            attacks |= bit.shiftDownRight();
+        }
 
-		return dst;
-	}();
+        return dst;
+    }();
 
-	constexpr auto KnightAttacks = []
-	{
-		std::array<Bitboard, 64> dst{};
+    constexpr auto kKnightAttacks = [] {
+        std::array<Bitboard, 64> dst{};
 
-		for (usize i = 0; i < dst.size(); ++i)
-		{
-			const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
+        for (usize i = 0; i < dst.size(); ++i) {
+            const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
 
-			auto &attacks = dst[i];
+            auto& attacks = dst[i];
 
-			attacks |= bit.shiftUpUpLeft();
-			attacks |= bit.shiftUpUpRight();
-			attacks |= bit.shiftUpLeftLeft();
-			attacks |= bit.shiftUpRightRight();
-			attacks |= bit.shiftDownLeftLeft();
-			attacks |= bit.shiftDownRightRight();
-			attacks |= bit.shiftDownDownLeft();
-			attacks |= bit.shiftDownDownRight();
-		}
+            attacks |= bit.shiftUpUpLeft();
+            attacks |= bit.shiftUpUpRight();
+            attacks |= bit.shiftUpLeftLeft();
+            attacks |= bit.shiftUpRightRight();
+            attacks |= bit.shiftDownLeftLeft();
+            attacks |= bit.shiftDownRightRight();
+            attacks |= bit.shiftDownDownLeft();
+            attacks |= bit.shiftDownDownRight();
+        }
 
-		return dst;
-	}();
+        return dst;
+    }();
 
-	constexpr auto KingAttacks = []
-	{
-		std::array<Bitboard, 64> dst{};
+    constexpr auto kKingAttacks = [] {
+        std::array<Bitboard, 64> dst{};
 
-		for (usize i = 0; i < dst.size(); ++i)
-		{
-			const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
+        for (usize i = 0; i < dst.size(); ++i) {
+            const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
 
-			auto &attacks = dst[i];
+            auto& attacks = dst[i];
 
-			attacks |= bit.shiftUp();
-			attacks |= bit.shiftDown();
-			attacks |= bit.shiftLeft();
-			attacks |= bit.shiftRight();
-			attacks |= bit.shiftUpLeft();
-			attacks |= bit.shiftUpRight();
-			attacks |= bit.shiftDownLeft();
-			attacks |= bit.shiftDownRight();
-		}
+            attacks |= bit.shiftUp();
+            attacks |= bit.shiftDown();
+            attacks |= bit.shiftLeft();
+            attacks |= bit.shiftRight();
+            attacks |= bit.shiftUpLeft();
+            attacks |= bit.shiftUpRight();
+            attacks |= bit.shiftDownLeft();
+            attacks |= bit.shiftDownRight();
+        }
 
-		return dst;
-	}();
+        return dst;
+    }();
 
-	template <Color Us>
-	consteval auto generatePawnAttacks()
-	{
-		std::array<Bitboard, 64> dst{};
+    template <Color Us>
+    consteval std::array<Bitboard, 64> generatePawnAttacks() {
+        std::array<Bitboard, 64> dst{};
 
-		for (usize i = 0; i < dst.size(); ++i)
-		{
-			const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
+        for (usize i = 0; i < dst.size(); ++i) {
+            const auto bit = Bitboard::fromSquare(static_cast<Square>(i));
 
-			dst[i] |= bit.shiftUpLeftRelative<Us>();
-			dst[i] |= bit.shiftUpRightRelative<Us>();
-		}
+            dst[i] |= bit.shiftUpLeftRelative<Us>();
+            dst[i] |= bit.shiftUpRightRelative<Us>();
+        }
 
-		return dst;
-	}
+        return dst;
+    }
 
-	constexpr auto BlackPawnAttacks = generatePawnAttacks<Color::Black>();
-	constexpr auto WhitePawnAttacks = generatePawnAttacks<Color::White>();
+    constexpr auto kBlackPawnAttacks = generatePawnAttacks<Color::kBlack>();
+    constexpr auto kWhitePawnAttacks = generatePawnAttacks<Color::kWhite>();
 
-	constexpr auto getAlfilAttacks(Square src)
-	{
-		return AlfilAttacks[static_cast<usize>(src)];
-	}
+    constexpr Bitboard getAlfilAttacks(Square src) {
+        return kAlfilAttacks[static_cast<usize>(src)];
+    }
 
-	constexpr auto getFerzAttacks(Square src)
-	{
-		return FerzAttacks[static_cast<usize>(src)];
-	}
+    constexpr Bitboard getFerzAttacks(Square src) {
+        return kFerzAttacks[static_cast<usize>(src)];
+    }
 
-	constexpr auto getKnightAttacks(Square src)
-	{
-		return KnightAttacks[static_cast<usize>(src)];
-	}
+    constexpr Bitboard getKnightAttacks(Square src) {
+        return kKnightAttacks[static_cast<usize>(src)];
+    }
 
-	constexpr auto getKingAttacks(Square src)
-	{
-		return KingAttacks[static_cast<usize>(src)];
-	}
+    constexpr Bitboard getKingAttacks(Square src) {
+        return kKingAttacks[static_cast<usize>(src)];
+    }
 
-	constexpr auto getPawnAttacks(Square src, Color color)
-	{
-		const auto &attacks = color == Color::White ? WhitePawnAttacks : BlackPawnAttacks;
-		return attacks[static_cast<usize>(src)];
-	}
+    constexpr Bitboard getPawnAttacks(Square src, Color color) {
+        const auto& attacks = color == Color::kWhite ? kWhitePawnAttacks : kBlackPawnAttacks;
+        return attacks[static_cast<usize>(src)];
+    }
 
-	inline auto getNonPawnPieceAttacks(PieceType piece, Square src, Bitboard occupancy = Bitboard{})
-	{
-		assert(piece != PieceType::None);
-		assert(piece != PieceType::Pawn);
+    inline Bitboard getNonPawnPieceAttacks(PieceType piece, Square src, Bitboard occupancy = Bitboard{}) {
+        assert(piece != PieceType::kNone);
+        assert(piece != PieceType::kPawn);
 
-		switch (piece)
-		{
-		case PieceType::Alfil: return getAlfilAttacks(src);
-		case PieceType::Ferz: return getFerzAttacks(src);
-		case PieceType::Knight: return getKnightAttacks(src);
-		case PieceType::Rook: return getRookAttacks(src, occupancy);
-		case PieceType::King: return getKingAttacks(src);
-		default: __builtin_unreachable();
-		}
-	}
-}
+        switch (piece) {
+            case PieceType::kAlfil:
+                return getAlfilAttacks(src);
+            case PieceType::kFerz:
+                return getFerzAttacks(src);
+            case PieceType::kKnight:
+                return getKnightAttacks(src);
+            case PieceType::kRook:
+                return getRookAttacks(src, occupancy);
+            case PieceType::kKing:
+                return getKingAttacks(src);
+            default:
+                __builtin_unreachable();
+        }
+    }
+} // namespace oranj::attacks

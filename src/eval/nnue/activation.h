@@ -22,181 +22,145 @@
 
 #include <algorithm>
 #include <cmath>
-#include <type_traits>
 #include <concepts>
 #include <exception>
+#include <type_traits>
 
 #include "../../util/simd.h"
 
-namespace oranj::eval::nnue::activation
-{
-	template <typename T>
-	concept Activation = requires(T t)
-	{
-		{ T::Id } -> std::same_as<const u8 &>;
-		{ T::activateDotAccumulate(
-				util::simd::zero<typename T::OutputType>(),
-		        util::simd::zero<typename T::InputType>(),
-	            util::simd::zero<typename T::InputType>()) }
-			-> std::same_as<util::simd::Vector<typename T::OutputType>>;
-		{ T::  output(typename T::OutputType{}) }
-			-> std::same_as<typename T::OutputType>;
-	};
+namespace oranj::eval::nnue::activation {
+    struct [[maybe_unused]] Identity {
+        static constexpr u8 kId = 3;
 
-	template <typename T>
-	concept PairwiseActivation = requires(T t)
-	{
-		{ T::Id } -> std::same_as<const u8 &>;
-		{ T::activateDotAccumulate(
-				util::simd::zero<typename T::OutputType>(),
-				util::simd::zero<typename T::InputType>(),
-				util::simd::zero<typename T::InputType>(),
-				util::simd::zero<typename T::InputType>()) }
-			-> std::same_as<util::simd::Vector<typename T::OutputType>>;
-		{ T::  output(typename T::OutputType{}) }
-			-> std::same_as<typename T::OutputType>;
-	};
+        template <typename T, T _unused>
+        OJ_ALWAYS_INLINE_NDEBUG static inline util::simd::PromotedVector<T> activateDotAccumulate(
+            util::simd::PromotedVector<T> sum,
+            util::simd::Vector<T> inputs,
+            util::simd::Vector<T> weights
+        ) {
+            using namespace util::simd;
 
-	template <typename T, typename Output>
-	struct [[maybe_unused]] Identity
-	{
-		using InputType = T;
-		using InputVector = util::simd::Vector<InputType>;
+            return mulAddAdjAcc<T>(sum, inputs, weights);
+        }
 
-		using OutputType = Output;
-		using OutputVector = util::simd::Vector<OutputType>;
+        template <typename T, T _unused>
+        OJ_ALWAYS_INLINE_NDEBUG static inline util::simd::PromotedVector<T> activateDotAccumulate(
+            util::simd::PromotedVector<T> sum,
+            util::simd::Vector<T> inputs1,
+            util::simd::Vector<T> inputs2,
+            util::simd::Vector<T> weights
+        ) {
+            using namespace util::simd;
 
-		static constexpr u8 Id = 3;
+            const auto products = mulLo<T>(inputs1, weights);
+            return mulAddAdjAcc<T>(sum, products, inputs2);
+        }
 
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
-			OutputVector sum, InputVector inputs, InputVector weights)
-		{
-			using namespace util::simd;
+        template <typename OutputType>
+        OJ_ALWAYS_INLINE_NDEBUG static inline OutputType output(OutputType value) {
+            return value;
+        }
+    };
 
-			return mulAddAdjAcc<InputType>(sum, inputs, weights);
-		}
+    struct [[maybe_unused]] ReLU {
+        static constexpr u8 kId = 2;
 
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
-			OutputVector sum, InputVector inputs1, InputVector inputs2, InputVector weights)
-		{
-			using namespace util::simd;
+        template <std::integral T, T _unused>
+        OJ_ALWAYS_INLINE_NDEBUG static inline util::simd::PromotedVector<T> activateDotAccumulate(
+            util::simd::PromotedVector<T> sum,
+            util::simd::Vector<T> inputs,
+            util::simd::Vector<T> weights
+        ) {
+            using namespace util::simd;
 
-			const auto products = mul<InputType>(inputs1, weights);
-			return mulAddAdjAcc<InputType>(sum, products, inputs2);
-		}
+            const auto activated = max<T>(inputs, zero<T>());
+            return mulAddAdjAcc<T>(sum, activated, weights);
+        }
 
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
-		{
-			return value;
-		}
-	};
+        template <std::integral T, T _unused>
+        OJ_ALWAYS_INLINE_NDEBUG static inline util::simd::PromotedVector<T> activateDotAccumulate(
+            util::simd::PromotedVector<T> sum,
+            util::simd::Vector<T> inputs1,
+            util::simd::Vector<T> inputs2,
+            util::simd::Vector<T> weights
+        ) {
+            using namespace util::simd;
 
-	template <typename T, typename Output>
-	struct [[maybe_unused]] ReLU
-	{
-		using InputType = T;
-		using InputVector = util::simd::Vector<InputType>;
+            const auto activated1 = max<T>(inputs1, zero<T>());
+            const auto activated2 = max<T>(inputs2, zero<T>());
 
-		using OutputType = Output;
-		using OutputVector = util::simd::Vector<OutputType>;
+            const auto products = mulLo<T>(activated1, weights);
+            return mulAddAdjAcc<T>(sum, products, activated2);
+        }
 
-		static constexpr u8 Id = 2;
+        template <typename T>
+        OJ_ALWAYS_INLINE_NDEBUG static inline T output(T value) {
+            return value;
+        }
+    };
 
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
-			OutputVector sum, InputVector inputs, InputVector weights)
-		{
-			using namespace util::simd;
+    struct [[maybe_unused]] ClippedReLU {
+        static constexpr u8 kId = 0;
 
-			const auto activated = max<InputType>(inputs, zero<InputType>());
-			return mulAddAdjAcc<InputType>(sum, activated, weights);
-		}
+        template <std::integral T, T kMax>
+        OJ_ALWAYS_INLINE_NDEBUG static inline util::simd::PromotedVector<T> activateDotAccumulate(
+            util::simd::PromotedVector<T> sum,
+            util::simd::Vector<T> inputs,
+            util::simd::Vector<T> weights
+        ) {
+            using namespace util::simd;
 
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
-			OutputVector sum, InputVector inputs1, InputVector inputs2, InputVector weights)
-		{
-			using namespace util::simd;
+            static const auto max = set1(kMax);
 
-			const auto activated1 = max<InputType>(inputs1, zero<InputType>());
-			const auto activated2 = max<InputType>(inputs2, zero<InputType>());
+            const auto clipped = clamp<T>(inputs, zero<T>(), max);
+            return mulAddAdjAcc<T>(sum, clipped, weights);
+        }
 
-			const auto products = mul<InputType>(activated1, weights);
-			return mulAddAdjAcc<InputType>(sum, products, activated2);
-		}
+        template <std::integral T, T kMax>
+        OJ_ALWAYS_INLINE_NDEBUG static inline util::simd::PromotedVector<T> activateDotAccumulate(
+            util::simd::PromotedVector<T> sum,
+            util::simd::Vector<T> inputs1,
+            util::simd::Vector<T> inputs2,
+            util::simd::Vector<T> weights
+        ) {
+            using namespace util::simd;
 
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
-		{
-			return value;
-		}
-	};
+            static const auto max = set1(kMax);
 
-	template <typename T, typename Output, T Max>
-	struct [[maybe_unused]] ClippedReLU
-	{
-		using InputType = T;
-		using InputVector = util::simd::Vector<InputType>;
+            const auto clipped1 = clamp<T>(inputs1, zero<T>(), max);
+            const auto clipped2 = clamp<T>(inputs2, zero<T>(), max);
 
-		using OutputType = Output;
-		using OutputVector = util::simd::Vector<OutputType>;
+            const auto products = mulLo<T>(clipped1, weights);
+            return mulAddAdjAcc<T>(sum, clipped2, products);
+        }
 
-		static constexpr u8 Id = 0;
+        template <typename T>
+        OJ_ALWAYS_INLINE_NDEBUG static inline T output(T value) {
+            return value;
+        }
+    };
 
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
-			OutputVector sum, InputVector inputs, InputVector weights)
-		{
-			using namespace util::simd;
+    struct [[maybe_unused]] SquaredClippedReLU {
+        static constexpr u8 kId = 1;
 
-			static const auto max = set1(Max);
+        template <std::integral T, T kMax>
+        OJ_ALWAYS_INLINE_NDEBUG static inline util::simd::PromotedVector<T> activateDotAccumulate(
+            util::simd::PromotedVector<T> sum,
+            util::simd::Vector<T> inputs,
+            util::simd::Vector<T> weights
+        ) {
+            using namespace util::simd;
 
-			const auto clipped = clamp<InputType>(inputs, zero<InputType>(), max);
-			return mulAddAdjAcc<InputType>(sum, clipped, weights);
-		}
+            static const auto max = set1(kMax);
 
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
-			OutputVector sum, InputVector inputs1, InputVector inputs2, InputVector weights)
-		{
-			using namespace util::simd;
+            const auto clipped = clamp<T>(inputs, zero<T>(), max);
+            const auto crelu = mulLo<T>(clipped, weights);
+            return mulAddAdjAcc<T>(sum, crelu, clipped);
+        }
 
-			static const auto max = set1(Max);
-
-			const auto clipped1 = clamp<InputType>(inputs1, zero<InputType>(), max);
-			const auto clipped2 = clamp<InputType>(inputs2, zero<InputType>(), max);
-
-			const auto products = mul<InputType>(clipped1, weights);
-			return mulAddAdjAcc<InputType>(sum, clipped2, products);
-		}
-
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
-		{
-			return value;
-		}
-	};
-
-	template <typename T, typename Output, T Max>
-	struct [[maybe_unused]] SquaredClippedReLU
-	{
-		using InputType = T;
-		using InputVector = util::simd::Vector<InputType>;
-
-		using OutputType = Output;
-		using OutputVector = util::simd::Vector<OutputType>;
-
-		static constexpr u8 Id = 1;
-
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto activateDotAccumulate(
-			OutputVector sum, InputVector inputs, InputVector weights)
-		{
-			using namespace util::simd;
-
-			static const auto max = set1(Max);
-
-			const auto clipped = util::simd::clamp<InputType>(inputs, zero<InputType>(), max);
-			const auto crelu = mul<InputType>(clipped, weights);
-			return mulAddAdjAcc<InputType>(sum, crelu, clipped);
-		}
-
-		OJ_ALWAYS_INLINE_NDEBUG static inline auto output(OutputType value)
-		{
-			return value / static_cast<OutputType>(Max);
-		}
-	};
-}
+        template <typename T, T kMax>
+        OJ_ALWAYS_INLINE_NDEBUG static inline T output(T value) {
+            return value / kMax;
+        }
+    };
+} // namespace oranj::eval::nnue::activation

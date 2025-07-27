@@ -20,128 +20,149 @@
 
 #include "../../types.h"
 
+#include <cassert>
 #include <istream>
+#include <memory>
 #include <ostream>
 #include <variant>
-#include <cassert>
 #include <vector>
-#include <iostream>
-#include <memory>
 
-#include "io.h"
+#include "../../3rdparty/zstd/zstd.h"
 #include "../../util/cemath.h"
 #include "../../util/memstream.h"
-#include "../../3rdparty/zstd/zstd.h"
+#include "io.h"
 
-namespace oranj::eval::nnue
-{
-	template <usize BlockSize>
-	class PaddedParamStream final : public IParamStream
-	{
-	public:
-		explicit PaddedParamStream(std::istream &in)
-			: m_stream{&in} {}
-		explicit PaddedParamStream(std::ostream &out)
-			: m_stream{&out} {}
+namespace oranj::eval::nnue {
+    template <usize kBlockSize>
+    class PaddedParamStream final : public IParamStream {
+    public:
+        explicit PaddedParamStream(std::istream& in) :
+                m_stream{&in} {}
+        explicit PaddedParamStream(std::ostream& out) :
+                m_stream{&out} {}
 
-		~PaddedParamStream() final = default;
+        ~PaddedParamStream() final = default;
 
-	protected:
-		inline auto readI16s(std::span<i16> dst) -> bool final
-		{
-			return read(reinterpret_cast<std::byte *>(dst.data()), dst.size_bytes());
-		}
+    protected:
+        inline bool readI8s(std::span<i8> dst) final {
+            return read(reinterpret_cast<std::byte*>(dst.data()), dst.size_bytes());
+        }
 
-		inline auto writeI16s(std::span<const i16> src) -> bool final
-		{
-			return write(reinterpret_cast<const std::byte *>(src.data()), src.size_bytes());
-		}
+        inline bool writeI8s(std::span<const i8> src) final {
+            return write(reinterpret_cast<const std::byte*>(src.data()), src.size_bytes());
+        }
 
-	private:
-		std::variant<std::istream *, std::ostream *> m_stream;
+        inline bool readI16s(std::span<i16> dst) final {
+            return read(reinterpret_cast<std::byte*>(dst.data()), dst.size_bytes());
+        }
 
-		inline auto read(std::byte *dst, usize n) -> bool
-		{
-			if (!std::holds_alternative<std::istream *>(m_stream))
-			{
-				assert(false);
-				return false;
-			}
+        inline bool writeI16s(std::span<const i16> src) final {
+            return write(reinterpret_cast<const std::byte*>(src.data()), src.size_bytes());
+        }
 
-			auto &stream = *std::get<std::istream *>(m_stream);
+        inline bool readI32s(std::span<i32> dst) final {
+            return read(reinterpret_cast<std::byte*>(dst.data()), dst.size_bytes());
+        }
 
-			const auto padding = calcPadding(n);
+        inline bool writeI32s(std::span<const i32> src) final {
+            return write(reinterpret_cast<const std::byte*>(src.data()), src.size_bytes());
+        }
 
-			stream.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(n));
-			stream.ignore(static_cast<std::streamsize>(padding));
+    private:
+        std::variant<std::istream*, std::ostream*> m_stream;
 
-			return !stream.fail();
-		}
+        inline bool read(std::byte* dst, usize n) {
+            if (!std::holds_alternative<std::istream*>(m_stream)) {
+                assert(false);
+                return false;
+            }
 
-		inline auto write(const std::byte *src, usize n) -> bool
-		{
-			if (!std::holds_alternative<std::ostream *>(m_stream))
-			{
-				assert(false);
-				return false;
-			}
+            auto& stream = *std::get<std::istream*>(m_stream);
 
-			static constexpr std::array<std::byte, BlockSize> Empty{};
+            const auto padding = calcPadding(n);
 
-			auto &stream = *std::get<std::ostream *>(m_stream);
+            stream.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(n));
+            stream.ignore(static_cast<std::streamsize>(padding));
 
-			const auto padding = calcPadding(n);
+            return !stream.fail();
+        }
 
-			stream.write(reinterpret_cast<const char *>(src), static_cast<std::streamsize>(n));
-			stream.write(reinterpret_cast<const char *>(Empty.data()), padding);
+        inline bool write(const std::byte* src, usize n) {
+            if (!std::holds_alternative<std::ostream*>(m_stream)) {
+                assert(false);
+                return false;
+            }
 
-			return !stream.fail();
-		}
+            static constexpr std::array<std::byte, kBlockSize> Empty{};
 
-		[[nodiscard]] static constexpr auto calcPadding(usize v) -> usize
-		{
-			return v - util::ceilDiv(v, BlockSize) * BlockSize;
-		}
-	};
+            auto& stream = *std::get<std::ostream*>(m_stream);
 
-	class ZstdParamStream final : public IParamStream
-	{
-	public:
-		explicit ZstdParamStream(std::istream &in);
+            const auto padding = calcPadding(n);
 
-		~ZstdParamStream() final;
+            stream.write(reinterpret_cast<const char*>(src), static_cast<std::streamsize>(n));
+            stream.write(reinterpret_cast<const char*>(Empty.data()), padding);
 
-	protected:
-		inline auto readI16s(std::span<i16> dst) -> bool final
-		{
-			return read(reinterpret_cast<std::byte *>(dst.data()), dst.size_bytes());
-		}
+            return !stream.fail();
+        }
 
-		inline auto writeI16s(std::span<const i16> src) -> bool final
-		{
-			std::cerr << "ZstdParamStream::writeI16s" << std::endl;
-			std::terminate();
-		}
+        [[nodiscard]] static constexpr usize calcPadding(usize v) {
+            return v - util::pad<kBlockSize>(v);
+        }
+    };
 
-	private:
-		std::istream &m_stream;
+    class ZstdParamStream final : public IParamStream {
+    public:
+        explicit ZstdParamStream(std::istream& in);
 
-		std::vector<std::byte> m_inBuf{};
-		std::vector<std::byte> m_outBuf{};
+        ~ZstdParamStream() final;
 
-		usize m_pos{};
-		usize m_end{};
+    protected:
+        inline bool readI8s(std::span<i8> dst) final {
+            return read(reinterpret_cast<std::byte*>(dst.data()), dst.size_bytes());
+        }
 
-		usize m_result{};
+        inline bool writeI8s(std::span<const i8> src) final {
+            eprintln("ZstdParamStream::writeI8s");
+            std::terminate();
+        }
 
-		ZSTD_DStream *m_dStream;
+        inline bool readI16s(std::span<i16> dst) final {
+            return read(reinterpret_cast<std::byte*>(dst.data()), dst.size_bytes());
+        }
 
-		ZSTD_inBuffer m_input{};
-		ZSTD_outBuffer m_output{};
+        inline bool writeI16s(std::span<const i16> src) final {
+            eprintln("ZstdParamStream::writeI16s");
+            std::terminate();
+        }
 
-		bool m_fail{false};
+        inline bool readI32s(std::span<i32> dst) final {
+            return read(reinterpret_cast<std::byte*>(dst.data()), dst.size_bytes());
+        }
 
-		auto fillBuffer() -> bool;
-		auto read(std::byte *dst, usize n) -> bool;
-	};
-}
+        inline bool writeI32s(std::span<const i32> src) final {
+            eprintln("ZstdParamStream::writeI32s");
+            std::terminate();
+        }
+
+    private:
+        std::istream& m_stream;
+
+        std::vector<std::byte> m_inBuf{};
+        std::vector<std::byte> m_outBuf{};
+
+        usize m_pos{};
+        usize m_end{};
+
+        usize m_result{};
+
+        ZSTD_DStream* m_dStream;
+
+        ZSTD_inBuffer m_input{};
+        ZSTD_outBuffer m_output{};
+
+        bool m_fail{false};
+
+        bool fillBuffer();
+        bool read(std::byte* dst, usize n);
+    };
+} // namespace oranj::eval::nnue

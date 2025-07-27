@@ -18,62 +18,60 @@
 
 #include "ctrlc.h"
 
-#include <iostream>
-
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <Windows.h>
+    #define WIN32_LEAN_AND_MEAN
+    #define NOMINMAX
+    #include <Windows.h>
 #else
-#include <signal.h>
+    #include <signal.h>
 #endif
 
-namespace oranj::util::signal
-{
-	namespace
-	{
-		std::vector<CtrlCHandler> s_handlers{};
-	}
+namespace oranj::util::signal {
+    namespace {
+        std::vector<CtrlCHandler> s_handlers{};
+    }
 
-	auto addCtrlCHandler(CtrlCHandler handler) -> void
-	{
-		s_handlers.push_back(std::move(handler));
-	}
+    void addCtrlCHandler(CtrlCHandler handler) {
+        s_handlers.push_back(std::move(handler));
+    }
 
-	auto init() -> void
-	{
+    void init() {
 #ifdef _WIN32
-		const auto result = SetConsoleCtrlHandler([](DWORD dwCtrlType) -> BOOL
-		{
-			if (dwCtrlType == CTRL_BREAK_EVENT)
-				return FALSE;
+        const auto result = SetConsoleCtrlHandler(
+            [](DWORD dwCtrlType) -> BOOL {
+                if (dwCtrlType == CTRL_BREAK_EVENT) {
+                    return FALSE;
+                }
 
-			for (auto &handler : s_handlers)
-			{
-				handler();
-			}
+                for (auto& handler : s_handlers) {
+                    handler();
+                }
 
-			return TRUE;
-		}, TRUE);
+                return TRUE;
+            },
+            TRUE
+        );
 
-		if (!result)
-			std::cerr << "failed to set ctrl+c handler" << std::endl;
+        if (!result) {
+            eprintln("failed to set ctrl+c handler");
+        }
 #else
-		struct sigaction action {
-			.sa_flags = SA_RESTART
-		};
+        struct sigaction action{.sa_flags = SA_RESTART};
 
-		// on some platforms this is a union, and C++ doesn't support nested designated initialisers
-		action.sa_handler = [](int signal)
-		{
-			for (auto &handler : s_handlers)
-			{
-				handler();
-			}
-		};
+        // on some platforms this is a union, and C++ doesn't support nested designated initialisers
+        action.sa_handler = [](int signal) {
+            for (auto& handler : s_handlers) {
+                handler();
+            }
+        };
 
-		if (sigaction(SIGINT, &action, nullptr))
-			std::cerr << "failed to set ctrl+c handler" << std::endl;
+        if (sigaction(SIGINT, &action, nullptr)) {
+            eprintln("failed to set SIGINT handler");
+        }
+
+        if (sigaction(SIGTERM, &action, nullptr)) {
+            eprintln("failed to set SIGTERM handler");
+        }
 #endif
-	}
-}
+    }
+} // namespace oranj::util::signal

@@ -20,78 +20,105 @@
 
 #include "types.h"
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 
 #include "core.h"
-#include "util/static_vector.h"
 #include "opts.h"
+#include "util/static_vector.h"
 
-namespace oranj
-{
-	enum class MoveType
-	{
-		Standard = 0,
-		Promotion,
-	};
+namespace oranj {
+    enum class MoveType {
+        kStandard = 0,
+        kPromotion,
+    };
 
-	class Move
-	{
-	public:
-		constexpr Move() = default;
-		constexpr ~Move() = default;
+    class Move {
+    public:
+        constexpr Move() = default;
 
-		[[nodiscard]] constexpr auto srcIdx() const { return m_move >> 10; }
-		[[nodiscard]] constexpr auto src() const { return static_cast<Square>(srcIdx()); }
+        [[nodiscard]] constexpr usize fromSqIdx() const {
+            return m_move >> 10;
+        }
 
-		[[nodiscard]] constexpr auto srcRank() const { return  m_move >> 13; }
-		[[nodiscard]] constexpr auto srcFile() const { return (m_move >> 10) & 0x7; }
+        [[nodiscard]] constexpr Square fromSq() const {
+            return static_cast<Square>(fromSqIdx());
+        }
 
-		[[nodiscard]] constexpr auto dstIdx() const { return (m_move >> 4) & 0x3F; }
-		[[nodiscard]] constexpr auto dst() const { return static_cast<Square>(dstIdx()); }
+        [[nodiscard]] constexpr i32 fromSqRank() const {
+            return m_move >> 13;
+        }
 
-		[[nodiscard]] constexpr auto dstRank() const { return (m_move >> 7) & 0x7; }
-		[[nodiscard]] constexpr auto dstFile() const { return (m_move >> 4) & 0x7; }
+        [[nodiscard]] constexpr i32 fromSqFile() const {
+            return (m_move >> 10) & 0x7;
+        }
 
-		[[nodiscard]] constexpr auto type() const { return static_cast<MoveType>(m_move & 0x3); }
-		[[nodiscard]] constexpr auto isPromo() const { return type() == MoveType::Promotion; }
+        [[nodiscard]] constexpr usize toSqIdx() const {
+            return (m_move >> 4) & 0x3F;
+        }
 
-		[[nodiscard]] constexpr auto isNull() const { return m_move == 0; }
+        [[nodiscard]] constexpr Square toSq() const {
+            return static_cast<Square>(toSqIdx());
+        }
 
-		[[nodiscard]] constexpr auto data() const { return m_move; }
+        [[nodiscard]] constexpr i32 toSqRank() const {
+            return (m_move >> 7) & 0x7;
+        }
 
-		[[nodiscard]] explicit constexpr operator bool() const { return !isNull(); }
+        [[nodiscard]] constexpr i32 toSqFile() const {
+            return (m_move >> 4) & 0x7;
+        }
 
-		constexpr auto operator==(Move other) const { return m_move == other.m_move; }
+        [[nodiscard]] constexpr MoveType type() const {
+            return static_cast<MoveType>(m_move & 0x3);
+        }
 
-		[[nodiscard]] static constexpr auto standard(Square src, Square dst)
-		{
-			return Move{static_cast<u16>(
-				(static_cast<u16>(src) << 10)
-				| (static_cast<u16>(dst) << 4)
-				| static_cast<u16>(MoveType::Standard)
-			)};
-		}
+        [[nodiscard]] constexpr bool isPromo() const {
+            return type() == MoveType::kPromotion;
+        }
 
-		[[nodiscard]] static constexpr auto promotion(Square src, Square dst)
-		{
-			return Move{static_cast<u16>(
-				(static_cast<u16>(src) << 10)
-				| (static_cast<u16>(dst) << 4)
-				| static_cast<u16>(MoveType::Promotion)
-			)};
-		}
+        [[nodiscard]] constexpr bool isNull() const {
+            return m_move == 0;
+        }
 
-	private:
-		explicit constexpr Move(u16 move) : m_move{move} {}
+        [[nodiscard]] constexpr u16 data() const {
+            return m_move;
+        }
 
-		u16 m_move{};
-	};
+        [[nodiscard]] explicit constexpr operator bool() const {
+            return !isNull();
+        }
 
-	constexpr Move NullMove{};
+        constexpr bool operator==(const Move& other) const = default;
 
-	// assumed upper bound for number of possible moves is 218
-	constexpr usize DefaultMoveListCapacity = 256;
+        [[nodiscard]] static constexpr Move standard(Square src, Square dst) {
+            return Move{static_cast<u16>(
+                (static_cast<u16>(src) << 10) | (static_cast<u16>(dst) << 4) | static_cast<u16>(MoveType::kStandard)
+            )};
+        }
 
-	using MoveList = StaticVector<Move, DefaultMoveListCapacity>;
-}
+        [[nodiscard]] static constexpr Move promotion(Square src, Square dst) {
+            return Move{static_cast<u16>(
+                (static_cast<u16>(src) << 10) | (static_cast<u16>(dst) << 4) | static_cast<u16>(MoveType::kPromotion)
+            )};
+        }
+
+    private:
+        explicit constexpr Move(u16 move) :
+                m_move{move} {}
+
+        u16 m_move{};
+    };
+
+    constexpr Move kNullMove{};
+
+    // assumed upper bound for number of possible moves is 218
+    constexpr usize kDefaultMoveListCapacity = 256;
+
+    using MoveList = StaticVector<Move, kDefaultMoveListCapacity>;
+} // namespace oranj
+
+template <>
+struct fmt::formatter<oranj::Move> : fmt::formatter<std::string_view> {
+    format_context::iterator format(oranj::Move value, format_context& ctx) const;
+};

@@ -22,88 +22,75 @@
 
 #include <array>
 
-#include "../core.h"
 #include "../bitboard.h"
+#include "../core.h"
 #include "../util/cemath.h"
 
-namespace oranj::attacks
-{
-	namespace internal
-	{
-		constexpr auto edges(i32 dir)
-		{
-			switch (dir)
-			{
-			case offsets::       Up: return boards::Rank8;
-			case offsets::     Down: return boards::Rank1;
-			case offsets::     Left: return boards::FileA;
-			case offsets::    Right: return boards::FileH;
-			default: __builtin_unreachable(); // don't
-			}
-		}
+namespace oranj::attacks {
+    namespace internal {
+        constexpr Bitboard edges(i32 dir) {
+            switch (dir) {
+                case offsets::kUp:
+                    return boards::kRank8;
+                case offsets::kDown:
+                    return boards::kRank1;
+                case offsets::kLeft:
+                    return boards::kFileA;
+                case offsets::kRight:
+                    return boards::kFileH;
+                default:
+                    __builtin_unreachable(); // don't
+            }
+        }
 
-		constexpr auto generateSlidingAttacks(Square src, i32 dir, Bitboard occupancy)
-		{
-			Bitboard dst{};
+        constexpr Bitboard generateSlidingAttacks(Square src, i32 dir, Bitboard occupancy) {
+            Bitboard dst{};
 
-			auto blockers = edges(dir);
+            auto blockers = edges(dir);
 
-			const bool right = dir < 0;
-			const auto shift = util::abs(dir);
+            const bool right = dir < 0;
+            const auto shift = util::abs(dir);
 
-			auto bit = squareBit(src);
+            auto bit = squareBit(src);
 
-			if (!(blockers & bit).empty())
-				return dst;
+            if (!(blockers & bit).empty()) {
+                return dst;
+            }
 
-			blockers |= occupancy;
+            blockers |= occupancy;
 
-			do
-			{
-				if (right)
-					dst |= bit >>= shift;
-				else dst |= bit <<= shift;
-			} while (!(bit & blockers));
+            do {
+                if (right) {
+                    dst |= bit >>= shift;
+                } else {
+                    dst |= bit <<= shift;
+                }
+            } while (!(bit & blockers));
 
-			return dst;
-		}
-	}
+            return dst;
+        }
+    } // namespace internal
 
-	constexpr auto EmptyBoardRooks = []
-	{
-		std::array<Bitboard, 64> dst{};
+    constexpr auto kEmptyBoardRooks = [] {
+        std::array<Bitboard, 64> dst{};
 
-		for (i32 square = 0; square < 64; ++square)
-		{
-			for (const auto dir : {
-				offsets::Up,
-				offsets::Down,
-				offsets::Left,
-				offsets::Right
-			})
-			{
-				const auto attacks = internal::generateSlidingAttacks(static_cast<Square>(square), dir, 0);
-				dst[square] |= attacks;
-			}
-		}
+        for (i32 square = 0; square < 64; ++square) {
+            for (const auto dir : {offsets::kUp, offsets::kDown, offsets::kLeft, offsets::kRight}) {
+                const auto attacks = internal::generateSlidingAttacks(static_cast<Square>(square), dir, 0);
+                dst[square] |= attacks;
+            }
+        }
 
-		return dst;
-	}();
+        return dst;
+    }();
 
-	consteval auto genRookAttacks(Square src, Bitboard occupancy)
-	{
-		Bitboard dst{};
+    consteval Bitboard genRookAttacks(Square src, Bitboard occupancy) {
+        Bitboard dst{};
 
-		for (const auto dir : {
-			offsets::Up,
-			offsets::Down,
-			offsets::Left,
-			offsets::Right
-		})
-		{
-			dst |= internal::generateSlidingAttacks(src, dir, occupancy);
-		}
+        for (const auto dir : {offsets::kUp, offsets::kDown, offsets::kLeft, offsets::kRight}) {
+            dst |= internal::generateSlidingAttacks(src, dir, occupancy);
+        }
 
-		return dst;
-	}
-}
+        return dst;
+    }
+} // namespace oranj::attacks
