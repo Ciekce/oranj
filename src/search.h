@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,306 +20,218 @@
 
 #include "types.h"
 
-#include <memory>
-#include <limits>
-#include <string>
-#include <optional>
-#include <utility>
 #include <atomic>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <vector>
-#include <algorithm>
 #include <cassert>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <thread>
+#include <utility>
+#include <vector>
 
-#include "search_fwd.h"
-#include "position/position.h"
-#include "limit/limit.h"
-#include "util/timer.h"
-#include "ttable.h"
 #include "eval/eval.h"
-#include "movepick.h"
+#include "limit.h"
+#include "position.h"
+#include "tb.h"
+#include "thread.h"
+#include "ttable.h"
 #include "util/barrier.h"
-#include "history.h"
-#include "correction.h"
-
-namespace oranj::search
-{
-	struct BenchData
-	{
-		SearchData search{};
-		f64 time{};
-	};
-
-	constexpr auto SyzygyProbeDepthRange = util::Range<i32>{1, MaxDepth};
-	constexpr auto SyzygyProbeLimitRange = util::Range<i32>{0, 7};
-
-	struct PvList
-	{
-		std::array<Move, MaxDepth> moves{};
-		u32 length{};
+#include "util/numa/numa.h"
+#include "util/timer.h"
 
-		inline auto update(Move move, const PvList &child)
-		{
-			moves[0] = move;
-			std::copy(child.moves.begin(),
-				child.moves.begin() + child.length,
-				moves.begin() + 1);
-
-			length = child.length + 1;
-
-			assert(length == 1 || moves[0] != moves[1]);
-		}
-
-		inline auto operator=(const PvList &other) -> auto &
-		{
-			std::copy(other.moves.begin(), other.moves.begin() + other.length, moves.begin());
-			length = other.length;
-
-			return *this;
-		}
-	};
-
-	struct ThreadData;
-
-	struct SearchStackEntry
-	{
-		PvList pv{};
-		Move move;
-
-		Score staticEval;
-
-		KillerTable killers{};
-
-		Move excluded{};
-		i32 multiExtensions{};
-	};
-
-	struct MoveStackEntry
-	{
-		MovegenData movegenData{};
-		StaticVector<Move, 256> failLowQuiets{};
-		StaticVector<Move, 32> failLowNoisies{};
-	};
-
-	struct alignas(CacheLineSize) ThreadData
-	{
-		ThreadData()
-		{
-			stack.resize(MaxDepth + 4);
-			moveStack.resize(MaxDepth * 2);
-			conthist.resize(MaxDepth + 4);
-			contMoves.resize(MaxDepth + 4);
-		}
-
-		u32 id{};
-		std::thread thread{};
-
-		// this is in here so clion in its infinite wisdom doesn't
-		// mark the entire iterative deepening loop unreachable
-		i32 maxDepth{};
-		SearchData search{};
-
-		bool datagen{false};
-
-		i32 minNmpPly{};
+namespace oranj::search {
+    struct BenchData {
+        f64 time{};
+        usize nodes{};
+    };
 
-		PvList rootPv{};
+    constexpr auto kSyzygyProbeDepthRange = util::Range<i32>{1, kMaxDepth};
+    constexpr auto kSyzygyProbeLimitRange = util::Range<i32>{0, 7};
 
-		eval::NnueState nnueState{};
+    struct SetupInfo {
+        Position rootPos{};
 
-		std::vector<SearchStackEntry> stack{};
-		std::vector<MoveStackEntry> moveStack{};
-		std::vector<ContinuationSubtable *> conthist{};
-		std::vector<PlayedMove> contMoves{};
+        usize keyHistorySize{};
+        std::span<const u64> keyHistory{};
+    };
 
-		HistoryTables history{};
-		CorrectionHistoryTable correctionHistory{};
+    class Searcher {
+    public:
+        explicit Searcher(usize ttSize = kDefaultTtSizeMib);
 
-		Position pos{};
+        ~Searcher() {
+            if (!m_quit) {
+                quit();
+            }
+        }
 
-		[[nodiscard]] inline auto isMainThread() const
-		{
-			return id == 0;
-		}
+        void newGame();
+        void ensureReady();
 
-		inline auto setNullmove(i32 ply)
-		{
-			assert(ply <= MaxDepth);
+        inline void setLimiter(limit::SearchLimiter limiter) {
+            m_limiter = limiter;
+        }
 
-			stack[ply].move = NullMove;
-			conthist[ply] = &history.contTable(Piece::WhitePawn, Square::A1);
-			contMoves[ply] = { Piece::None, Square::None };
-		}
+        inline void setMaxDepth(i32 maxDepth) {
+            m_maxDepth = maxDepth;
+        }
 
-		inline auto setMove(i32 ply, Move move)
-		{
-			assert(ply <= MaxDepth);
+        void startSearch(
+            const Position& pos,
+            std::span<const u64> keyHistory,
+            util::Instant startTime,
+            std::span<Move> moves,
+            bool infinite
+        );
 
-			const auto moving = pos.boards().pieceAt(move.src());
+        void stop();
+        void waitForStop();
 
-			stack[ply].move = move;
-			conthist[ply] = &history.contTable(moving, move.dst());
-			contMoves[ply] = { moving, move.dst() };
-		}
+        // Clears all threads, and reallocates main thread data on the current NUMA node.
+        // Makes this object unusable for normal searches, just for benching or datagen
+        [[nodiscard]] ThreadData& take(u32 numaId = 0);
 
-		inline auto clearContMove(i32 ply)
-		{
-			contMoves[ply] = { Piece::None, Square::None };
-		}
-	};
+        // -> [move, unnormalised, normalised]
+        std::pair<Score, Score> runDatagenSearch();
 
-	class Searcher
-	{
-	public:
-		explicit Searcher(usize ttSize = DefaultTtSizeMib);
+        void runBenchSearch(BenchData& data);
 
-		~Searcher()
-		{
-			if (!m_quit)
-				quit();
-		}
+        [[nodiscard]] inline bool searching() const {
+            const std::unique_lock lock{m_searchMutex};
+            return m_searching.load(std::memory_order::relaxed);
+        }
 
-		auto newGame() -> void;
-		auto ensureReady() -> void;
+        void setThreads(u32 threadCount);
 
-		inline auto setLimiter(std::unique_ptr<limit::ISearchLimiter> limiter)
-		{
-			m_limiter = std::move(limiter);
-		}
+        [[nodiscard]] u32 threadCount() const {
+            return m_threadData.size();
+        }
 
-		auto startSearch(const Position &pos, util::Instant startTime, i32 maxDepth,
-			std::span<Move> moves, std::unique_ptr<limit::ISearchLimiter> limiter, bool infinite) -> void;
-		auto stop() -> void;
+        inline void setTtSize(usize mib) {
+            m_ttable.resize(mib);
+        }
 
-		// -> [move, unnormalised, normalised]
-		auto runDatagenSearch(ThreadData &thread) -> std::pair<Score, Score>;
+        inline void setSilent(bool silent) {
+            m_silent = silent;
+        }
 
-		auto runBench(BenchData &data, const Position &pos, i32 depth) -> void;
+        inline void quit() {
+            m_quit.store(true, std::memory_order::release);
 
-		[[nodiscard]] inline auto searching() const
-		{
-			const std::unique_lock lock{m_searchMutex};
-			return m_searching.load(std::memory_order::relaxed);
-		}
+            stop();
+            stopThreads();
+        }
 
-		auto setThreads(u32 threadCount) -> void;
+    private:
+        TTable m_ttable;
 
-		inline auto setTtSize(usize mib)
-		{
-			m_ttable.resize(mib);
-		}
+        std::vector<std::thread> m_threads{};
+        std::vector<std::unique_ptr<ThreadData>> m_threadData{};
 
-		inline auto quit() -> void
-		{
-			m_quit.store(true, std::memory_order::release);
+        bool m_silent{};
 
-			stop();
-			stopThreads();
-		}
+        mutable std::mutex m_searchMutex{};
 
-	private:
-		TTable m_ttable;
+        std::atomic_bool m_quit{};
+        std::atomic_bool m_searching{};
 
-		std::vector<ThreadData> m_threads{};
+        util::Instant m_startTime;
 
-		mutable std::mutex m_searchMutex{};
+        util::Barrier m_initBarrier{2};
 
-		std::atomic_bool m_quit{};
-		std::atomic_bool m_searching{};
+        util::Barrier m_resetBarrier{2};
+        util::Barrier m_idleBarrier{2};
+        util::Barrier m_setupBarrier{2};
 
-		util::Instant m_startTime;
+        util::Barrier m_searchEndBarrier{1};
 
-		util::Barrier m_resetBarrier{2};
-		util::Barrier m_idleBarrier{2};
+        std::atomic_int m_stop{};
 
-		util::Barrier m_searchEndBarrier{1};
+        std::mutex m_stopMutex{};
+        std::condition_variable m_stopSignal{};
+        std::atomic_int m_runningThreads{};
 
-		std::atomic_int m_stop{};
+        std::optional<limit::SearchLimiter> m_limiter{};
 
-		std::mutex m_stopMutex{};
-		std::condition_variable m_stopSignal{};
-		std::atomic_int m_runningThreads{};
+        bool m_infinite{};
+        i32 m_maxDepth{kMaxDepth};
 
-		std::unique_ptr<limit::ISearchLimiter> m_limiter{};
-		bool m_infinite{};
+        std::vector<RootMove> m_rootMoves{};
 
-		MoveList m_rootMoves{};
+        // specifically unfiltered root moves, when probing TBs at root
+        usize m_rootMoveCount{};
 
-		Score m_minRootScore{};
-		Score m_maxRootScore{};
+        bool m_tbRoot{false};
+        bool m_probeWdl{false};
 
-		eval::Contempt m_contempt{};
+        u32 m_multiPv{};
 
-		enum class RootStatus
-		{
-			NoLegalMoves = 0,
-			Generated,
-			Searchmoves,
-		};
+        eval::Contempt m_contempt{};
 
-		auto initRootMoves(const Position &pos) -> RootStatus;
+        SetupInfo m_setupInfo{};
 
-		auto stopThreads() -> void;
+        numa::NumaUniqueAllocation<CorrectionHistoryTable> m_corrhists{};
 
-		auto run(ThreadData &thread) -> void;
+        void populateDefaultRootMoves(const Position& pos);
+        void rankTbMoves(const Position& pos, std::span<const u64> keys);
 
-		[[nodiscard]] inline auto hasStopped() const
-		{
-			return m_stop.load(std::memory_order::relaxed) != 0;
-		}
+        void stopThreads();
 
-		[[nodiscard]] inline auto checkStop(const SearchData &data, bool mainThread, bool allowSoft)
-		{
-			if (hasStopped())
-				return true;
+        void run(u32 threadId);
 
-			if (mainThread && m_limiter->stop(data, allowSoft))
-			{
-				m_stop.store(1, std::memory_order::relaxed);
-				return true;
-			}
+        [[nodiscard]] inline bool hasStopped() const {
+            return m_stop.load(std::memory_order::relaxed) != 0;
+        }
 
-			return false;
-		}
+        [[nodiscard]] inline f64 elapsed() const {
+            return m_startTime.elapsed();
+        }
 
-		[[nodiscard]] inline auto checkHardTimeout(const SearchData &data, bool mainThread) -> bool
-		{
-			return checkStop(data, mainThread, false);
-		}
+        Score searchRoot(ThreadData& thread, bool actualSearch);
 
-		[[nodiscard]] inline auto checkSoftTimeout(const SearchData &data, bool mainThread)
-		{
-			return checkStop(data, mainThread, true);
-		}
+        template <bool kPvNode = false, bool kRootNode = false>
+        Score search(
+            ThreadData& thread,
+            const Position& pos,
+            PvList& pv,
+            i32 depth,
+            i32 ply,
+            u32 moveStackIdx,
+            Score alpha,
+            Score beta,
+            bool cutnode
+        );
 
-		[[nodiscard]] inline auto elapsed() const
-		{
-			return m_startTime.elapsed();
-		}
+        template <>
+        Score search<false, true>(
+            ThreadData& thread,
+            const Position& pos,
+            PvList& pv,
+            i32 depth,
+            i32 ply,
+            u32 moveStackIdx,
+            Score alpha,
+            Score beta,
+            bool cutnode
+        ) = delete;
 
-		[[nodiscard]] inline auto isLegalRootMove(Move move) const
-		{
-			return std::ranges::find(m_rootMoves, move) != m_rootMoves.end();
-		}
+        template <bool kPvNode = false>
+        Score qsearch(
+            ThreadData& thread,
+            const Position& pos,
+            PvList& pv,
+            i32 ply,
+            u32 moveStackIdx,
+            Score alpha,
+            Score beta
+        );
 
-		auto searchRoot(ThreadData &thread, bool actualSearch) -> Score;
+        void reportSingle(const ThreadData& thread, u32 pvIdx, f64 time);
+        void report(const ThreadData& thread, f64 time);
 
-		template <bool PvNode = false, bool RootNode = false>
-		auto search(ThreadData &thread, PvList &pv, i32 depth, i32 ply,
-			u32 moveStackIdx, Score alpha, Score beta, bool cutnode) -> Score;
-
-		template <>
-		auto search<false, true>(ThreadData &thread, PvList &pv, i32 depth, i32 ply,
-			u32 moveStackIdx, Score alpha, Score beta, bool cutnode) -> Score = delete;
-
-		template <bool PvNode = false>
-		auto qsearch(ThreadData &thread, i32 ply, u32 moveStackIdx, Score alpha, Score beta) -> Score;
-
-		auto report(const ThreadData &mainThread, const PvList &pv, i32 depth,
-			f64 time, Score score, Score alpha = -ScoreInf, Score beta = ScoreInf) -> void;
-		auto finalReport(const ThreadData &mainThread, const PvList &pv,
-			i32 depthCompleted, f64 time, Score score) -> void;
-	};
-}
+        const ThreadData& selectThread() const;
+        void finalReport();
+    };
+} // namespace oranj::search

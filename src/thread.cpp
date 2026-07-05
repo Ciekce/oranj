@@ -1,0 +1,107 @@
+/*
+ * oranj, a UCI shatranj engine
+ * Copyright (C) 2026 Ciekce
+ *
+ * oranj is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * oranj is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with oranj. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#include "thread.h"
+
+#include <algorithm>
+#include <tuple>
+
+namespace oranj::search {
+    std::pair<Position, ThreadPosGuard<false>> ThreadData::applyNullmove(const Position& pos, i32 ply) {
+        assert(ply <= kMaxDepth);
+
+        stack[ply].move = kNullMove;
+        stack[ply].moving = Pieces::kNone;
+        stack[ply].captured = Pieces::kNone;
+        stack[ply].quiet = true;
+
+        stack[ply].threats = pos.threats();
+
+        conthist[ply] = &history.contTable(Pieces::kWhitePawn, Squares::kA1);
+
+        keyHistory.push_back(pos.key());
+
+        return std::pair<Position, ThreadPosGuard<false>>{
+            std::piecewise_construct,
+            std::forward_as_tuple(pos.applyNullMove()),
+            std::forward_as_tuple(keyHistory, nnueState)
+        };
+    }
+
+    std::pair<Position, ThreadPosGuard<true>> ThreadData::applyMove(const Position& pos, i32 ply, Move move) {
+        assert(ply <= kMaxDepth);
+
+        const auto moving = pos.pieceOn(move.fromSq());
+
+        stack[ply].move = move;
+        stack[ply].moving = moving;
+        stack[ply].captured = pos.captureTarget(move);
+        stack[ply].quiet = !pos.isNoisy(move);
+
+        stack[ply].threats = pos.threats();
+
+        conthist[ply] = &history.contTable(moving, move.toSq());
+
+        keyHistory.push_back(pos.key());
+
+        return std::pair<Position, ThreadPosGuard<true>>{
+            std::piecewise_construct,
+            std::forward_as_tuple(pos.applyMove(move, nnueState.push())),
+            std::forward_as_tuple(keyHistory, nnueState)
+        };
+    }
+
+    RootMove& ThreadData::findRootMove(Move move) {
+        for (u32 idx = pvIdx; idx < rootMoves.size(); ++idx) {
+            auto& rootMove = rootMoves[idx];
+            if (move == rootMove.move()) {
+                return rootMove;
+            }
+        }
+
+        eprintln("Failed to find root move for {}", move);
+        std::terminate();
+    }
+
+    bool ThreadData::isLegalRootMove(Move move) const {
+        for (u32 idx = pvIdx; idx < pvEnd; ++idx) {
+            const auto& rootMove = rootMoves[idx];
+            if (move == rootMove.move()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void ThreadData::sortSearchedRootMoves() {
+        std::stable_sort(
+            rootMoves.begin() + pvStart,
+            rootMoves.begin() + pvIdx + 1,
+            [](const RootMove& a, const RootMove& b) { return a.score > b.score; }
+        );
+    }
+
+    void ThreadData::sortRemainingRootMoves() {
+        std::stable_sort(
+            rootMoves.begin() + pvIdx,
+            rootMoves.begin() + pvEnd,
+            [](const RootMove& a, const RootMove& b) { return a.score > b.score; }
+        );
+    }
+} // namespace oranj::search

@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,10 +22,7 @@
 
 #include <functional>
 
-namespace oranj::util::signal
-{
-	using CtrlCHandler = std::function<void()>;
-	auto addCtrlCHandler(CtrlCHandler handler) -> void;
-
-	auto init() -> void;
-}
+namespace oranj::util::signal {
+    using CtrlCHandler = std::function<void()>;
+    void setCtrlCHandler(CtrlCHandler handler);
+} // namespace oranj::util::signal

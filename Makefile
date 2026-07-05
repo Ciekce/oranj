@@ -1,126 +1,50 @@
-VERSION := $(file < version.txt)
-DEFAULT_NET := $(file < network.txt)
+ifeq ($(OS), Windows_NT)
+    override DETECTED_OS := Windows
+else
+    override DETECTED_OS := $(shell uname -s)
+endif
+
+export DETECTED_OS
+
+ifeq ($(DETECTED_OS),Darwin)
+    override VERSION := $(shell cat version.txt)
+    override DEFAULT_NET := $(shell cat network.txt)
+else
+    override VERSION := $(file < version.txt)
+    override DEFAULT_NET := $(file < network.txt)
+endif
+
+export VERSION
 
 ifndef EXE
     EXE = oranj-$(VERSION)
-    NO_EXE_SET = true
+    override NO_EXE_SET = true
+    export NO_EXE_SET
 endif
+
+export EXE
 
 ifndef EVALFILE
     EVALFILE = $(DEFAULT_NET).nnue
-    NO_EVALFILE_SET = true
+    override NO_EVALFILE_SET = true
 endif
 
-PGO = off
-COMMIT_HASH = off
+export EVALFILE
 
-SOURCES_COMMON := src/main.cpp src/uci.cpp src/util/split.cpp src/position/position.cpp src/movegen.cpp src/search.cpp src/util/timer.cpp src/pretty.cpp src/ttable.cpp src/limit/time.cpp src/eval/nnue.cpp src/perft.cpp src/bench.cpp src/tunable.cpp src/opts.cpp src/datagen/datagen.cpp src/wdl.cpp src/cuckoo.cpp src/datagen/marlinformat.cpp src/datagen/viriformat.cpp src/datagen/fen.cpp src/3rdparty/zstd/zstddeclib.c src/eval/nnue/io_impl.cpp src/util/ctrlc.cpp
-SOURCES_BMI2 := src/attacks/bmi2/attacks.cpp
-SOURCES_BLACK_MAGIC := src/attacks/black_magic/attacks.cpp
+ifeq ($(DETECTED_OS), Windows)
+    override RMDIR := rmdir /s /q
+else
+    override RMDIR := rm -rf
+endif
 
-SUFFIX :=
-
+CC := clang
 CXX := clang++
-CXXFLAGS := -std=c++20 -O3 -flto -DNDEBUG -DOJ_NETWORK_FILE=\"$(EVALFILE)\" -DOJ_VERSION=$(VERSION)
 
-CXXFLAGS_NATIVE := -DOJ_NATIVE -march=native
-CXXFLAGS_TUNABLE := -DOJ_NATIVE -march=native -DOJ_EXTERNAL_TUNE=1
-CXXFLAGS_VNNI512 := -DOJ_VNNI512 -DOJ_FAST_PEXT -march=znver4 -mtune=znver4
-CXXFLAGS_AVX512 := -DOJ_AVX512 -DOJ_FAST_PEXT -march=x86-64-v4 -mtune=skylake-avx512
-CXXFLAGS_AVX2_BMI2 := -DOJ_AVX2_BMI2 -DOJ_FAST_PEXT -march=haswell -mtune=haswell
-CXXFLAGS_AVX2 := -DOJ_AVX2 -march=bdver4 -mno-tbm -mno-sse4a -mno-bmi2 -mtune=znver2
-CXXFLAGS_SSE41_POPCNT := -DOJ_SSE41_POPCNT -march=nehalem -mtune=sandybridge
+export CC
+export CXX
 
-LDFLAGS :=
-
-COMPILER_VERSION := $(shell $(CXX) --version)
-
-ifeq (, $(findstring clang,$(COMPILER_VERSION)))
-    ifeq (, $(findstring gcc,$(COMPILER_VERSION)))
-        ifeq (, $(findstring g++,$(COMPILER_VERSION)))
-            $(error Only Clang and GCC supported)
-        endif
-    endif
-endif
-
-ifeq ($(OS), Windows_NT)
-    DETECTED_OS := Windows
-    SUFFIX := .exe
-    RM := del
-else
-    DETECTED_OS := $(shell uname -s)
-    SUFFIX :=
-    LDFLAGS += -pthread
-    # don't ask
-    ifdef IS_COSMO
-        CXXFLAGS += -stdlib=libc++
-    endif
-    RM := rm
-endif
-
-ifneq (, $(findstring clang,$(COMPILER_VERSION)))
-    ifneq ($(DETECTED_OS),Darwin)
-        LDFLAGS += -fuse-ld=lld
-    endif
-    ifeq ($(DETECTED_OS),Windows)
-        ifeq (,$(shell where llvm-profdata))
-            $(warning llvm-profdata not found, disabling PGO)
-            override PGO := off
-        endif
-    else
-        ifeq (,$(shell which llvm-profdata))
-            $(warning llvm-profdata not found, disabling PGO)
-            override PGO := off
-        endif
-    endif
-    PGO_GENERATE := -DOJ_PGO_PROFILE -fprofile-instr-generate
-    PGO_MERGE := llvm-profdata merge -output=sp.profdata *.profraw
-    PGO_USE := -fprofile-instr-use=sp.profdata
-else
-    $(warning GCC currently produces very slow binaries for oranj)
-    PGO_GENERATE := -DOJ_PGO_PROFILE -fprofile-generate
-    PGO_MERGE :=
-    PGO_USE := -fprofile-use
-endif
-
-ARCH_DEFINES := $(shell echo | $(CXX) -march=native -E -dM -)
-
-ifneq ($(findstring __BMI2__, $(ARCH_DEFINES)),)
-    ifeq ($(findstring __znver1, $(ARCH_DEFINES)),)
-        ifeq ($(findstring __znver2, $(ARCH_DEFINES)),)
-            ifeq ($(findstring __bdver, $(ARCH_DEFINES)),)
-                CXXFLAGS_NATIVE += -DOJ_FAST_PEXT
-            endif
-        endif
-    endif
-endif
-
-ifeq ($(COMMIT_HASH),on)
-    CXXFLAGS += -DOJ_COMMIT_HASH=$(shell git log -1 --pretty=format:%h)
-endif
-
-PROFILE_OUT = oj_profile$(SUFFIX)
-
-ifneq ($(PGO),on)
-define build
-    $(CXX) $(CXXFLAGS) $(CXXFLAGS_$1) $(LDFLAGS) -o $(EXE)$(if $(NO_EXE_SET),-$2)$(SUFFIX) $(filter-out $(EVALFILE),$^)
-endef
-else
-define build
-    $(CXX) $(CXXFLAGS) $(CXXFLAGS_$1) $(LDFLAGS) -o $(PROFILE_OUT) $(PGO_GENERATE) $(filter-out $(EVALFILE),$^)
-    ./$(PROFILE_OUT) bench
-    $(RM) $(PROFILE_OUT)
-    $(PGO_MERGE)
-    $(CXX) $(CXXFLAGS) $(CXXFLAGS_$1) $(LDFLAGS) -o $(EXE)$(if $(NO_EXE_SET),-$2)$(SUFFIX) $(PGO_USE) $(filter-out $(EVALFILE),$^)
-    $(RM) *.profraw
-    $(RM) sp.profdata
-endef
-endif
-
-release: vnni512 avx512 avx2-bmi2 avx2 sse41-popcnt
-all: native release
-
-.PHONY: all
+releases: avx512 avx2-bmi2 zen2
+all: native releases
 
 .DEFAULT_GOAL := native
 
@@ -132,28 +56,46 @@ $(EVALFILE):
 download-net: $(EVALFILE)
 endif
 
-$(EXE): $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BLACK_MAGIC) $(SOURCES_BMI2)
-	$(call build,NATIVE,native)
+.PHONY: native
+native: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=$@ IS_CALLED_FROM_MAKEFILE=yea
 
-native: $(EXE)
+.PHONY: tunable
+tunable: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=$@ IS_CALLED_FROM_MAKEFILE=yea
 
-tunable: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BLACK_MAGIC) $(SOURCES_BMI2)
-	$(call build,TUNABLE,tunable)
+.PHONY: sanitizer
+sanitizer: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=$@ IS_CALLED_FROM_MAKEFILE=yea
 
-vnni512: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BMI2)
-	$(call build,VNNI512,vnni512)
+.PHONY: avx512
+avx512: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=$@ IS_CALLED_FROM_MAKEFILE=yea
 
-avx512: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BMI2)
-	$(call build,AVX512,avx512)
+.PHONY: avx2-bmi2
+avx2-bmi2: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=$@ IS_CALLED_FROM_MAKEFILE=yea
 
-avx2-bmi2: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BMI2)
-	$(call build,AVX2_BMI2,avx2-bmi2)
+.PHONY: zen2
+zen2: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=$@ IS_CALLED_FROM_MAKEFILE=yea
 
-avx2: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BLACK_MAGIC)
-	$(call build,AVX2,avx2)
+.PHONY: armv8-4
+armv8-4: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=$@ IS_CALLED_FROM_MAKEFILE=yea
 
-sse41-popcnt: $(EVALFILE) $(SOURCES_COMMON) $(SOURCES_BLACK_MAGIC)
-	$(call build,SSE41_POPCNT,sse41-popcnt)
+.PHONY: apple-m1
+apple-m1: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=$@ IS_CALLED_FROM_MAKEFILE=yea
+
+.PHONY: bench
+bench: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=native bench IS_CALLED_FROM_MAKEFILE=yea
+
+.PHONY: format
+format: $(EVALFILE)
+	$(MAKE) -f build.mk TYPE=native format IS_CALLED_FROM_MAKEFILE=yea
 
 clean:
+	$(RMDIR) tmp
 

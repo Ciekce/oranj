@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,268 +18,402 @@
 
 #include "movegen.h"
 
-#include <array>
-#include <algorithm>
-
 #include "attacks/attacks.h"
-#include "rays.h"
-#include "util/bitfield.h"
 #include "opts.h"
+#include "rays.h"
 
-namespace oranj
-{
-	namespace
-	{
-		inline auto pushStandards(ScoredMoveList &dst, i32 offset, Bitboard board)
-		{
-			while (!board.empty())
-			{
-				const auto dstSquare = board.popLowestSquare();
-				const auto srcSquare = static_cast<Square>(static_cast<i32>(dstSquare) - offset);
+namespace oranj {
+    namespace {
+        inline void pushStandards(ScoredMoveList& dst, i32 offset, Bitboard board) {
+            for (const auto dstSquare : board) {
+                const auto srcSquare = dstSquare.offset(-offset);
+                dst.push({Move::standard(srcSquare, dstSquare), 0});
+            }
+        }
 
-				dst.push({Move::standard(srcSquare, dstSquare), 0});
-			}
-		}
+        inline void pushStandards(ScoredMoveList& dst, Square srcSquare, Bitboard board) {
+            for (const auto dstSquare : board) {
+                dst.push({Move::standard(srcSquare, dstSquare), 0});
+            }
+        }
 
-		inline auto pushStandards(ScoredMoveList &dst, Square srcSquare, Bitboard board)
-		{
-			while (!board.empty())
-			{
-				const auto dstSquare = board.popLowestSquare();
-				dst.push({Move::standard(srcSquare, dstSquare), 0});
-			}
-		}
+        inline void pushQueenPromotions(ScoredMoveList& noisy, i32 offset, Bitboard board) {
+            for (const auto dstSquare : board) {
+                const auto srcSquare = dstSquare.offset(-offset);
+                noisy.push({Move::promotion(srcSquare, dstSquare, PieceTypes::kQueen), 0});
+            }
+        }
 
-		inline auto pushPromotions(ScoredMoveList &noisy, i32 offset, Bitboard board)
-		{
-			while (!board.empty())
-			{
-				const auto dstSquare = board.popLowestSquare();
-				const auto srcSquare = static_cast<Square>(static_cast<i32>(dstSquare) - offset);
+        inline void pushUnderpromotions(ScoredMoveList& quiet, i32 offset, Bitboard board) {
+            for (const auto dstSquare : board) {
+                const auto srcSquare = dstSquare.offset(-offset);
+                quiet.push({Move::promotion(srcSquare, dstSquare, PieceTypes::kKnight), 0});
+                quiet.push({Move::promotion(srcSquare, dstSquare, PieceTypes::kRook), 0});
+                quiet.push({Move::promotion(srcSquare, dstSquare, PieceTypes::kBishop), 0});
+            }
+        }
 
-				noisy.push({Move::promotion(srcSquare, dstSquare), 0});
-			}
-		}
+        inline void pushCastling(ScoredMoveList& dst, Square srcSquare, Square dstSquare) {
+            dst.push({Move::castling(srcSquare, dstSquare), 0});
+        }
 
-		template <Color Us>
-		auto generatePawnsNoisy_(ScoredMoveList &noisy, const Position &pos, Bitboard dstMask)
-		{
-			constexpr auto Them = oppColor(Us);
+        inline void pushEnPassants(ScoredMoveList& noisy, i32 offset, Bitboard board) {
+            for (const auto dstSquare : board) {
+                const auto srcSquare = dstSquare.offset(-offset);
+                noisy.push({Move::enPassant(srcSquare, dstSquare), 0});
+            }
+        }
 
-			constexpr auto PromotionRank = boards::promotionRank<Us>();
+        void generatePawnsNoisy(ScoredMoveList& noisy, const Position& pos, Bitboard dstMask) {
+            const auto us = pos.stm();
+            const auto them = pos.nstm();
 
-			constexpr auto ForwardOffset = offsets::up<Us>();
-			constexpr auto LeftOffset = offsets::upLeft<Us>();
-			constexpr auto RightOffset = offsets::upRight<Us>();
+            const auto kPromotionRank = boards::promotionRank(us);
 
-			const auto &bbs = pos.bbs();
+            const auto forwardOffset = offsets::up(us);
+            const auto leftOffset = offsets::upLeft(us);
+            const auto rightOffset = offsets::upRight(us);
 
-			const auto theirs = bbs.occupancy<Them>();
+            const auto king = pos.king(us);
+            const auto forwardPinMask = Bitboard::file(king.file());
+            const auto leftPinMask =
+                us == Colors::kBlack ? attacks::kDiagonals[king.idx()] : attacks::kAntiDiagonals[king.idx()];
+            const auto rightPinMask =
+                us == Colors::kBlack ? attacks::kAntiDiagonals[king.idx()] : attacks::kDiagonals[king.idx()];
 
-			const auto forwardDstMask = dstMask & PromotionRank & ~theirs;
+            const auto theirs = pos.bb(them);
 
-			const auto pawns = bbs.pawns<Us>();
+            const auto forwardDstMask = dstMask & kPromotionRank & ~theirs;
 
-			const auto leftAttacks = pawns.template shiftUpLeftRelative<Us>() & dstMask;
-			const auto rightAttacks = pawns.template shiftUpRightRelative<Us>() & dstMask;
+            const auto pawns = pos.bbs().pawns(us);
+            const auto pinned = pos.pinned(us);
 
-			pushPromotions(noisy, LeftOffset,   leftAttacks & theirs & PromotionRank);
-			pushPromotions(noisy, RightOffset, rightAttacks & theirs & PromotionRank);
+            const auto movablePawns = [&](Bitboard pinMask) { return (pawns & ~pinned) | (pawns & pinMask); };
 
-			const auto forwards = pawns.template shiftUpRelative<Us>() & forwardDstMask;
-			pushPromotions(noisy, ForwardOffset, forwards);
+            const auto leftAttacks = movablePawns(leftPinMask).shiftUpLeftRelative(us) & dstMask;
+            const auto rightAttacks = movablePawns(rightPinMask).shiftUpRightRelative(us) & dstMask;
 
-			pushStandards(noisy,  LeftOffset,  leftAttacks & theirs & ~PromotionRank);
-			pushStandards(noisy, RightOffset, rightAttacks & theirs & ~PromotionRank);
-		}
+            pushQueenPromotions(noisy, leftOffset, leftAttacks & theirs & kPromotionRank);
+            pushQueenPromotions(noisy, rightOffset, rightAttacks & theirs & kPromotionRank);
 
-		inline auto generatePawnsNoisy(ScoredMoveList &noisy, const Position &pos, Bitboard dstMask)
-		{
-			if (pos.toMove() == Color::Black)
-				generatePawnsNoisy_<Color::Black>(noisy, pos, dstMask);
-			else generatePawnsNoisy_<Color::White>(noisy, pos, dstMask);
-		}
+            const auto forwards = movablePawns(forwardPinMask).shiftUpRelative(us) & forwardDstMask;
+            pushQueenPromotions(noisy, forwardOffset, forwards);
 
-		template <Color Us>
-		auto generatePawnsQuiet_(ScoredMoveList &quiet, const BitboardSet &bbs, Bitboard dstMask, Bitboard occ)
-		{
-			constexpr auto PromotionRank = boards::promotionRank<Us>();
+            pushStandards(noisy, leftOffset, leftAttacks & theirs & ~kPromotionRank);
+            pushStandards(noisy, rightOffset, rightAttacks & theirs & ~kPromotionRank);
 
-			const auto ForwardOffset = offsets::up<Us>();
+            if (pos.enPassant() != Squares::kNone) {
+                // We do not need to check for check or for a clearance pin here as this is done in Position::filterEp.
 
-			const auto forwardDstMask = dstMask & ~PromotionRank & ~occ;
+                const auto epMask = Bitboard::fromSquare(pos.enPassant());
 
-			const auto pawns = bbs.pawns<Us>();
+                const auto leftAttacker = movablePawns(leftPinMask).shiftUpLeftRelative(us) & epMask;
+                const auto rightAttacker = movablePawns(rightPinMask).shiftUpRightRelative(us) & epMask;
 
-			const auto forwards = pawns.template shiftUpRelative<Us>() & forwardDstMask;
-			pushStandards(quiet, ForwardOffset, forwards);
-		}
+                pushEnPassants(noisy, leftOffset, leftAttacker);
+                pushEnPassants(noisy, rightOffset, rightAttacker);
+            }
+        }
 
-		inline auto generatePawnsQuiet(ScoredMoveList &quiet, const Position &pos, Bitboard dstMask, Bitboard occ)
-		{
-			if (pos.toMove() == Color::Black)
-				generatePawnsQuiet_<Color::Black>(quiet, pos.bbs(), dstMask, occ);
-			else generatePawnsQuiet_<Color::White>(quiet, pos.bbs(), dstMask, occ);
-		}
+        void generatePawnsQuiet(ScoredMoveList& quiet, const Position& pos, Bitboard dstMask, Bitboard occ) {
+            const auto us = pos.stm();
+            const auto them = pos.nstm();
 
-		template <PieceType Piece, const std::array<Bitboard, 64> &Attacks>
-		inline auto precalculated(ScoredMoveList &dst, const Position &pos, Bitboard dstMask)
-		{
-			const auto us = pos.toMove();
+            const auto promotionRank = boards::promotionRank(us);
+            const auto thirdRank = boards::rank(us, 2);
 
-			auto pieces = pos.bbs().forPiece(Piece, us);
-			while (!pieces.empty())
-			{
-				const auto srcSquare = pieces.popLowestSquare();
-				const auto attacks = Attacks[static_cast<usize>(srcSquare)];
+            const auto forwardOffset = offsets::up(us);
+            const auto doubleOffset = forwardOffset * 2;
 
-				pushStandards(dst, srcSquare, attacks & dstMask);
-			}
-		}
+            const auto leftOffset = offsets::upLeft(us);
+            const auto rightOffset = offsets::upRight(us);
 
-		auto generateAlfils(ScoredMoveList &dst, const Position &pos, Bitboard dstMask)
-		{
-			precalculated<PieceType::Alfil, attacks::AlfilAttacks>(dst, pos, dstMask);
-		}
+            const auto king = pos.king(us);
+            const auto forwardPinMask = Bitboard::file(king.file());
+            const auto leftPinMask =
+                us == Colors::kBlack ? attacks::kDiagonals[king.idx()] : attacks::kAntiDiagonals[king.idx()];
+            const auto rightPinMask =
+                us == Colors::kBlack ? attacks::kAntiDiagonals[king.idx()] : attacks::kDiagonals[king.idx()];
 
-		auto generateFerzes(ScoredMoveList &dst, const Position &pos, Bitboard dstMask)
-		{
-			precalculated<PieceType::Ferz, attacks::FerzAttacks>(dst, pos, dstMask);
-		}
+            const auto theirs = pos.bb(them);
 
-		auto generateKnights(ScoredMoveList &dst, const Position &pos, Bitboard dstMask)
-		{
-			precalculated<PieceType::Knight, attacks::KnightAttacks>(dst, pos, dstMask);
-		}
+            const auto forwardDstMask = dstMask & ~theirs;
 
-		auto generateKings(ScoredMoveList &dst, const Position &pos, Bitboard dstMask)
-		{
-			precalculated<PieceType::King, attacks::KingAttacks>(dst, pos, dstMask);
-		}
+            const auto pawns = pos.bbs().pawns(us);
+            const auto pinned = pos.pinned(us);
 
-		auto generateRooks(ScoredMoveList &dst, const Position &pos, Bitboard dstMask)
-		{
-			const auto &bbs = pos.bbs();
+            const auto movablePawns = [&](Bitboard pinMask) { return (pawns & ~pinned) | (pawns & pinMask); };
 
-			const auto us = pos.toMove();
-			const auto them = oppColor(us);
+            const auto leftAttacks = movablePawns(leftPinMask).shiftUpLeftRelative(us) & dstMask;
+            const auto rightAttacks = movablePawns(rightPinMask).shiftUpRightRelative(us) & dstMask;
 
-			const auto ours = bbs.forColor(us);
-			const auto theirs = bbs.forColor(them);
+            pushUnderpromotions(quiet, leftOffset, leftAttacks & theirs & promotionRank);
+            pushUnderpromotions(quiet, rightOffset, rightAttacks & theirs & promotionRank);
 
-			const auto occupancy = ours | theirs;
+            auto forwards = movablePawns(forwardPinMask).shiftUpRelative(us) & ~occ;
 
-			auto rooks = bbs.rooks(us);
+            auto singles = forwards & forwardDstMask;
+            pushUnderpromotions(quiet, forwardOffset, singles & promotionRank);
+            singles &= ~promotionRank;
 
-			while (!rooks.empty())
-			{
-				const auto src = rooks.popLowestSquare();
-				const auto attacks = attacks::getRookAttacks(src, occupancy);
+            forwards &= thirdRank;
+            const auto doubles = forwards.shiftUpRelative(us) & forwardDstMask;
 
-				pushStandards(dst, src, attacks & dstMask);
-			}
-		}
-	}
+            pushStandards(quiet, doubleOffset, doubles);
+            pushStandards(quiet, forwardOffset, singles);
+        }
 
-	auto generateNoisy(ScoredMoveList &noisy, const Position &pos) -> void
-	{
-		const auto &bbs = pos.bbs();
+        void generateKnights(ScoredMoveList& dst, const Position& pos, Bitboard dstMask) {
+            const auto nonPinnedKnights = pos.bbs().knights(pos.stm()) & ~pos.pinned(pos.stm());
+            for (const auto srcSquare : nonPinnedKnights) {
+                const auto attacks = attacks::kKnightAttacks[srcSquare.idx()];
+                pushStandards(dst, srcSquare, attacks & dstMask);
+            }
+        }
 
-		const auto us = pos.toMove();
-		const auto them = oppColor(us);
+        inline void generateFrcCastling(
+            ScoredMoveList& dst,
+            const Position& pos,
+            Bitboard occ,
+            Square king,
+            Square kingDst,
+            Square rook,
+            Square rookDst
+        ) {
+            const auto us = pos.stm();
 
-		const auto ours = bbs.forColor(us);
+            const auto toKingDst = rayBetween(king, kingDst);
+            const auto toRook = rayBetween(king, rook);
 
-		const auto kingDstMask = bbs.forColor(them);
+            const auto clearOcc = occ ^ king.bit() ^ rook.bit();
+            const auto threats = pos.threats();
 
-		auto dstMask = kingDstMask;
+            const auto clearMask = toKingDst | toRook | kingDst.bit() | rookDst.bit();
+            const auto checkMask = toKingDst | kingDst.bit();
 
-		// promotions are noisy
-		const auto promos = ~ours & (us == Color::Black ? boards::Rank1 : boards::Rank8);
+            if ((clearOcc & clearMask).empty() && (threats & checkMask).empty() && !pos.pinned(us).hasSq(rook)) {
+                pushCastling(dst, king, rook);
+            }
+        }
 
-		auto pawnDstMask = kingDstMask | promos;
+        template <bool kCastling>
+        void generateKings(ScoredMoveList& dst, const Position& pos, Bitboard dstMask) {
+            const auto king = pos.king(pos.stm());
+            const auto attacks = attacks::kKingAttacks[king.idx()];
+            pushStandards(dst, king, attacks & dstMask & ~pos.threats());
 
-		if (pos.isCheck())
-		{
-			if (pos.checkers().multiple())
-			{
-				generateKings(noisy, pos, kingDstMask);
-				return;
-			}
+            if constexpr (kCastling) {
+                if (!pos.isCheck()) {
+                    const auto& castlingRooks = pos.castlingRooks();
+                    const auto occ = pos.occ();
+                    const auto threats = pos.threats();
 
-			dstMask = pos.checkers();
-			pawnDstMask = kingDstMask | (promos & orthoRayBetween(pos.king(us), pos.checkers().lowestSquare()));
-		}
+                    // this branch is cheaper than the extra checks the chess960 castling movegen does
+                    if (g_opts.chess960) {
+                        if (pos.stm() == Colors::kBlack) {
+                            if (castlingRooks.black().kingside != Squares::kNone) {
+                                generateFrcCastling(
+                                    dst,
+                                    pos,
+                                    occ,
+                                    pos.blackKing(),
+                                    Squares::kG8,
+                                    castlingRooks.black().kingside,
+                                    Squares::kF8
+                                );
+                            }
+                            if (castlingRooks.black().queenside != Squares::kNone) {
+                                generateFrcCastling(
+                                    dst,
+                                    pos,
+                                    occ,
+                                    pos.blackKing(),
+                                    Squares::kC8,
+                                    castlingRooks.black().queenside,
+                                    Squares::kD8
+                                );
+                            }
+                        } else {
+                            if (castlingRooks.white().kingside != Squares::kNone) {
+                                generateFrcCastling(
+                                    dst,
+                                    pos,
+                                    occ,
+                                    pos.whiteKing(),
+                                    Squares::kG1,
+                                    castlingRooks.white().kingside,
+                                    Squares::kF1
+                                );
+                            }
+                            if (castlingRooks.white().queenside != Squares::kNone) {
+                                generateFrcCastling(
+                                    dst,
+                                    pos,
+                                    occ,
+                                    pos.whiteKing(),
+                                    Squares::kC1,
+                                    castlingRooks.white().queenside,
+                                    Squares::kD1
+                                );
+                            }
+                        }
+                    } else {
+                        if (pos.stm() == Colors::kBlack) {
+                            if (castlingRooks.black().kingside != Squares::kNone
+                                && (occ & U64(0x6000000000000000)).empty()
+                                && (threats & U64(0x7000000000000000)).empty())
+                            {
+                                pushCastling(dst, pos.blackKing(), Squares::kH8);
+                            }
 
-		generateAlfils(noisy, pos, dstMask);
-		generateFerzes(noisy, pos, dstMask);
-		generateRooks(noisy, pos, dstMask);
-		generatePawnsNoisy(noisy, pos, pawnDstMask);
-		generateKnights(noisy, pos, dstMask);
-		generateKings(noisy, pos, kingDstMask);
-	}
+                            if (castlingRooks.black().queenside != Squares::kNone
+                                && (occ & U64(0x0E00000000000000)).empty()
+                                && (threats & U64(0x1C00000000000000)).empty())
+                            {
+                                pushCastling(dst, pos.blackKing(), Squares::kA8);
+                            }
+                        } else {
+                            if (castlingRooks.white().kingside != Squares::kNone
+                                && (occ & U64(0x0000000000000060)).empty()
+                                && (threats & U64(0x0000000000000070)).empty())
+                            {
+                                pushCastling(dst, pos.whiteKing(), Squares::kH1);
+                            }
 
-	auto generateQuiet(ScoredMoveList &quiet, const Position &pos) -> void
-	{
-		const auto &bbs = pos.bbs();
+                            if (castlingRooks.white().queenside != Squares::kNone
+                                && (occ & U64(0x000000000000000E)).empty()
+                                && (threats & U64(0x000000000000001C)).empty())
+                            {
+                                pushCastling(dst, pos.whiteKing(), Squares::kA1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-		const auto us = pos.toMove();
-		const auto them = oppColor(us);
+        void generateSliders(ScoredMoveList& dst, const Position& pos, Bitboard dstMask) {
+            const auto& bbs = pos.bbs();
 
-		const auto ours = bbs.forColor(us);
-		const auto theirs = bbs.forColor(them);
+            const auto us = pos.stm();
 
-		const auto kingDstMask = ~(ours | theirs);
+            const auto occ = pos.occ();
+            const auto pinned = pos.pinned(us);
 
-		auto dstMask = kingDstMask;
+            const auto king = pos.king(us);
 
-		if (pos.isCheck())
-		{
-			if (pos.checkers().multiple())
-			{
-				generateKings(quiet, pos, kingDstMask);
-				return;
-			}
+            const auto queens = bbs.queens(us);
+            const auto rooks = queens | bbs.rooks(us);
+            const auto bishops = queens | bbs.bishops(us);
 
-			dstMask = orthoRayBetween(pos.king(us), pos.checkers().lowestSquare());
-		}
+            for (const auto src : rooks & ~pinned) {
+                const auto attacks = attacks::getRookAttacks(src, occ);
+                pushStandards(dst, src, attacks & dstMask);
+            }
 
-		generateAlfils(quiet, pos, dstMask);
-		generateFerzes(quiet, pos, dstMask);
-		generateRooks(quiet, pos, dstMask);
-		generatePawnsQuiet(quiet, pos, dstMask, ours | theirs);
-		generateKnights(quiet, pos, dstMask);
-		generateKings(quiet, pos, kingDstMask);
-	}
+            for (const auto src : bishops & ~pinned) {
+                const auto attacks = attacks::getBishopAttacks(src, occ);
+                pushStandards(dst, src, attacks & dstMask);
+            }
 
-	auto generateAll(ScoredMoveList &dst, const Position &pos) -> void
-	{
-		const auto &bbs = pos.bbs();
+            for (const auto src : rooks & pinned) {
+                const auto pinRay = rayPast(king, src);
+                const auto attacks = attacks::getRookAttacks(src, occ);
+                pushStandards(dst, src, attacks & dstMask & pinRay);
+            }
 
-		const auto us = pos.toMove();
+            for (const auto src : bishops & pinned) {
+                const auto pinRay = rayPast(king, src);
+                const auto attacks = attacks::getBishopAttacks(src, occ);
+                pushStandards(dst, src, attacks & dstMask & pinRay);
+            }
+        }
+    } // namespace
 
-		const auto kingDstMask = ~bbs.forColor(pos.toMove());
+    void generateNoisy(ScoredMoveList& noisy, const Position& pos) {
+        const auto us = pos.stm();
+        const auto them = us.flip();
 
-		auto dstMask = kingDstMask;
+        const auto ours = pos.bb(us);
 
-		if (pos.isCheck())
-		{
-			if (pos.checkers().multiple())
-			{
-				generateKings(dst, pos, kingDstMask);
-				return;
-			}
+        const auto kingDstMask = pos.bb(them);
 
-			dstMask = pos.checkers()
-				| orthoRayBetween(pos.king(us), pos.checkers().lowestSquare());
-		}
+        auto dstMask = kingDstMask;
 
-		generateAlfils(dst, pos, dstMask);
-		generateFerzes(dst, pos, dstMask);
-		generateRooks(dst, pos, dstMask);
-		generatePawnsNoisy(dst, pos, dstMask);
-		generatePawnsQuiet(dst, pos, dstMask, bbs.occupancy());
-		generateKnights(dst, pos, dstMask);
-		generateKings(dst, pos, kingDstMask);
-	}
-}
+        // queen promotions are noisy
+        const auto promos = ~ours & (us == Colors::kBlack ? boards::kRank1 : boards::kRank8);
+
+        auto pawnDstMask = kingDstMask | promos;
+
+        if (pos.isCheck()) {
+            if (pos.checkers().multiple()) {
+                generateKings<false>(noisy, pos, kingDstMask);
+                return;
+            }
+
+            dstMask = pos.checkers();
+
+            pawnDstMask = dstMask | (promos & rayBetween(pos.king(us), pos.checkers().lowestSquare()));
+        }
+
+        generateSliders(noisy, pos, dstMask);
+        generatePawnsNoisy(noisy, pos, pawnDstMask);
+        generateKnights(noisy, pos, dstMask);
+        generateKings<false>(noisy, pos, kingDstMask);
+    }
+
+    void generateQuiet(ScoredMoveList& quiet, const Position& pos) {
+        const auto us = pos.stm();
+        const auto them = us.flip();
+
+        const auto ours = pos.bb(us);
+        const auto theirs = pos.bb(them);
+
+        const auto kingDstMask = ~(ours | theirs);
+
+        auto dstMask = kingDstMask;
+        // for underpromotions
+        auto pawnDstMask = kingDstMask;
+
+        if (pos.isCheck()) {
+            if (pos.checkers().multiple()) {
+                generateKings<false>(quiet, pos, kingDstMask);
+                return;
+            }
+
+            pawnDstMask = dstMask = rayBetween(pos.king(us), pos.checkers().lowestSquare());
+
+            pawnDstMask |= pos.checkers() & boards::promotionRank(us);
+        } else {
+            pawnDstMask |= boards::promotionRank(us);
+        }
+
+        generateSliders(quiet, pos, dstMask);
+        generatePawnsQuiet(quiet, pos, pawnDstMask, ours | theirs);
+        generateKnights(quiet, pos, dstMask);
+        generateKings<true>(quiet, pos, kingDstMask);
+    }
+
+    void generateAll(ScoredMoveList& dst, const Position& pos) {
+        const auto us = pos.stm();
+
+        const auto kingDstMask = ~pos.bb(pos.stm());
+
+        auto dstMask = kingDstMask;
+
+        if (pos.isCheck()) {
+            if (pos.checkers().multiple()) {
+                generateKings<false>(dst, pos, kingDstMask);
+                return;
+            }
+
+            dstMask = pos.checkers() | rayBetween(pos.king(us), pos.checkers().lowestSquare());
+        }
+
+        generateSliders(dst, pos, dstMask);
+        generatePawnsNoisy(dst, pos, dstMask);
+        generatePawnsQuiet(dst, pos, dstMask, pos.occ());
+        generateKnights(dst, pos, dstMask);
+        generateKings<true>(dst, pos, kingDstMask);
+    }
+} // namespace oranj

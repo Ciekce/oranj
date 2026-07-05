@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,469 +21,588 @@
 #include "types.h"
 
 #include <array>
+#include <cassert>
+#include <utility>
 
 #include "core.h"
 #include "util/bits.h"
 
-namespace oranj
-{
-	namespace offsets
-	{
-		constexpr i32 Up = 8;
-		constexpr i32 Down = -8;
-		constexpr i32 Left = -1;
-		constexpr i32 Right = 1;
-
-		constexpr auto UpLeft = Up + Left;
-		constexpr auto UpRight = Up + Right;
-		constexpr auto DownLeft = Down + Left;
-		constexpr auto DownRight = Down + Right;
-
-		template <Color C>
-		constexpr auto up()
-		{
-			if constexpr (C == Color::Black)
-				return Down;
-			else return Up;
-		}
-
-		template <Color C>
-		constexpr auto upLeft()
-		{
-			if constexpr (C == Color::Black)
-				return DownLeft;
-			else return UpLeft;
-		}
-
-		template <Color C>
-		constexpr auto upRight()
-		{
-			if constexpr (C == Color::Black)
-				return DownRight;
-			else return UpRight;
-		}
-
-		template <Color C>
-		constexpr auto down()
-		{
-			if constexpr (C == Color::Black)
-				return Up;
-			else return Down;
-		}
-
-		template <Color C>
-		constexpr auto downLeft()
-		{
-			if constexpr (C == Color::Black)
-				return UpLeft;
-			else return DownLeft;
-		}
-
-		template <Color C>
-		constexpr auto downRight()
-		{
-			if constexpr (C == Color::Black)
-				return UpRight;
-			else return DownRight;
-		}
-	}
-
-	namespace shifts
-	{
-		constexpr i32 Vertical = 8;
-		constexpr i32 Horizontal = 1;
-
-		// '\'
-		constexpr auto DiagonalLR = Vertical - Horizontal;
-		// '/'
-		constexpr auto DiagonalRL = Vertical + Horizontal;
-
-		constexpr auto Diagonal12LR = Vertical + Vertical - Horizontal;
-		constexpr auto Diagonal12RL = Vertical + Vertical + Horizontal;
-		constexpr auto Diagonal21LR = Vertical - Horizontal - Horizontal;
-		constexpr auto Diagonal21RL = Vertical + Horizontal + Horizontal;
-	}
-
-	class BitboardSlot
-	{
-	public:
-		[[nodiscard]] constexpr operator bool() const { return (m_board & m_mask) != 0; }
-
-		constexpr auto operator=(bool rhs) -> auto &
-		{
-			if (rhs)
-				m_board |= m_mask;
-			else m_board &= ~m_mask;
-
-			return *this;
-		}
-
-	private:
-		constexpr BitboardSlot(u64 &board, i32 n)
-			: m_board{board},
-			  m_mask{u64{1} << n} {}
-
-		u64 &m_board;
-		u64 m_mask;
-
-		friend class Bitboard;
-	};
-
-	class Bitboard
-	{
-	public:
-		static constexpr auto Rank1 = U64(0x00000000000000FF);
-		static constexpr auto Rank2 = U64(0x000000000000FF00);
-		static constexpr auto Rank3 = U64(0x0000000000FF0000);
-		static constexpr auto Rank4 = U64(0x00000000FF000000);
-		static constexpr auto Rank5 = U64(0x000000FF00000000);
-		static constexpr auto Rank6 = U64(0x0000FF0000000000);
-		static constexpr auto Rank7 = U64(0x00FF000000000000);
-		static constexpr auto Rank8 = U64(0xFF00000000000000);
-
-		static constexpr auto FileA = U64(0x0101010101010101);
-		static constexpr auto FileB = U64(0x0202020202020202);
-		static constexpr auto FileC = U64(0x0404040404040404);
-		static constexpr auto FileD = U64(0x0808080808080808);
-		static constexpr auto FileE = U64(0x1010101010101010);
-		static constexpr auto FileF = U64(0x2020202020202020);
-		static constexpr auto FileG = U64(0x4040404040404040);
-		static constexpr auto FileH = U64(0x8080808080808080);
-
-		static constexpr auto  DarkSquares = U64(0xAA55AA55AA55AA55);
-		static constexpr auto LightSquares = U64(0x55AA55AA55AA55AA);
-
-		static constexpr auto CenterSquares = U64(0x0000001818000000);
-
-		static constexpr auto All = U64(0xFFFFFFFFFFFFFFFF);
-
-		constexpr Bitboard(u64 board = 0) : m_board{board} {}
-
-		[[nodiscard]] constexpr operator u64() const { return m_board; }
-
-		[[nodiscard]] constexpr auto operator&(Bitboard rhs) const -> Bitboard { return m_board & rhs; }
-		[[nodiscard]] constexpr auto operator|(Bitboard rhs) const -> Bitboard { return m_board | rhs; }
-		[[nodiscard]] constexpr auto operator^(Bitboard rhs) const -> Bitboard { return m_board ^ rhs; }
-
-		constexpr auto operator&=(Bitboard rhs) -> auto & { m_board &= rhs; return *this; }
-		constexpr auto operator|=(Bitboard rhs) -> auto & { m_board |= rhs; return *this; }
-		constexpr auto operator^=(Bitboard rhs) -> auto & { m_board ^= rhs; return *this; }
-
-		[[nodiscard]] constexpr auto operator&(u64 rhs) const -> Bitboard { return m_board & rhs; }
-		[[nodiscard]] constexpr auto operator|(u64 rhs) const -> Bitboard { return m_board | rhs; }
-		[[nodiscard]] constexpr auto operator^(u64 rhs) const -> Bitboard { return m_board ^ rhs; }
-
-		constexpr auto operator&=(u64 rhs) -> auto & { m_board &= rhs; return *this; }
-		constexpr auto operator|=(u64 rhs) -> auto & { m_board |= rhs; return *this; }
-		constexpr auto operator^=(u64 rhs) -> auto & { m_board ^= rhs; return *this; }
-
-		[[nodiscard]] constexpr auto operator&(i32 rhs) const -> Bitboard { return m_board & static_cast<u64>(rhs); }
-		[[nodiscard]] constexpr auto operator|(i32 rhs) const -> Bitboard { return m_board | static_cast<u64>(rhs); }
-		[[nodiscard]] constexpr auto operator^(i32 rhs) const -> Bitboard { return m_board ^ static_cast<u64>(rhs); }
-
-		constexpr auto operator&=(i32 rhs) -> auto & { m_board &= static_cast<u64>(rhs); return *this; }
-		constexpr auto operator|=(i32 rhs) -> auto & { m_board |= static_cast<u64>(rhs); return *this; }
-		constexpr auto operator^=(i32 rhs) -> auto & { m_board ^= static_cast<u64>(rhs); return *this; }
-
-		[[nodiscard]] constexpr auto operator~() const -> Bitboard { return ~m_board; }
-
-		[[nodiscard]] constexpr auto operator<<(i32 rhs) const -> Bitboard { return m_board << rhs; }
-		[[nodiscard]] constexpr auto operator>>(i32 rhs) const -> Bitboard { return m_board >> rhs; }
-
-		constexpr auto operator<<=(i32 rhs) -> auto & { m_board <<= rhs; return *this; }
-		constexpr auto operator>>=(i32 rhs) -> auto & { m_board >>= rhs; return *this; }
-
-		[[nodiscard]] constexpr auto operator[](Square s) const -> bool { return m_board & squareBit(s); }
-		[[nodiscard]] constexpr auto operator[](Square s) { return BitboardSlot{m_board, static_cast<i32>(s)}; }
-
-		[[nodiscard]] constexpr auto popcount() const { return util::popcnt(m_board); }
-
-		[[nodiscard]] constexpr auto empty() const { return m_board == 0; }
-		[[nodiscard]] constexpr auto multiple() const { return util::resetLsb(m_board) != 0; }
-		[[nodiscard]] constexpr auto one() const { return !empty() && !multiple(); }
-
-		[[nodiscard]] constexpr auto lowestSquare() const
-		{
-			return static_cast<Square>(util::ctz(m_board));
-		}
-
-		[[nodiscard]] constexpr auto lowestBit() const -> Bitboard
-		{
-			return util::lsb(m_board);
-		}
-
-		[[nodiscard]] constexpr auto popLowestSquare()
-		{
-			const auto square = lowestSquare();
-			m_board = util::resetLsb(m_board);
-			return square;
-		}
-
-		[[nodiscard]] constexpr auto popLowestBit() -> Bitboard
-		{
-			const auto bit = lowestBit();
-			m_board = util::resetLsb(m_board);
-			return bit;
-		}
-
-		constexpr auto clear()
-		{
-			m_board = 0;
-		}
-
-		[[nodiscard]] constexpr auto shiftUp() const -> Bitboard
-		{
-			return m_board << shifts::Vertical;
-		}
-
-		[[nodiscard]] constexpr auto shiftDown() const -> Bitboard
-		{
-			return m_board >> shifts::Vertical;
-		}
-
-		[[nodiscard]] constexpr auto shiftLeft() const -> Bitboard
-		{
-			return (m_board >> shifts::Horizontal) & ~FileH;
-		}
-
-		[[nodiscard]] constexpr auto shiftLeftUnchecked() const -> Bitboard
-		{
-			return m_board >> shifts::Horizontal;
-		}
-
-		[[nodiscard]] constexpr auto shiftRight() const -> Bitboard
-		{
-			return (m_board << shifts::Horizontal) & ~FileA;
-		}
-
-		[[nodiscard]] constexpr auto shiftRightUnchecked() const -> Bitboard
-		{
-			return m_board << shifts::Horizontal;
-		}
-
-		[[nodiscard]] constexpr auto shiftUpLeft() const -> Bitboard
-		{
-			return (m_board << shifts::DiagonalLR) & ~FileH;
-		}
-
-		[[nodiscard]] constexpr auto shiftUpRight() const -> Bitboard
-		{
-			return (m_board << shifts::DiagonalRL) & ~FileA;
-		}
-
-		[[nodiscard]] constexpr auto shiftDownLeft() const -> Bitboard
-		{
-			return (m_board >> shifts::DiagonalRL) & ~FileH;
-		}
-
-		[[nodiscard]] constexpr auto shiftDownRight() const -> Bitboard
-		{
-			return (m_board >> shifts::DiagonalLR) & ~FileA;
-		}
-
-		[[nodiscard]] constexpr auto shiftUpUpLeft() const -> Bitboard
-		{
-			return (m_board << shifts::Diagonal12LR) & ~FileH;
-		}
-
-		[[nodiscard]] constexpr auto shiftUpUpRight() const -> Bitboard
-		{
-			return (m_board << shifts::Diagonal12RL) & ~FileA;
-		}
-
-		[[nodiscard]] constexpr auto shiftUpLeftLeft() const -> Bitboard
-		{
-			return (m_board << shifts::Diagonal21LR) & ~(FileG | FileH);
-		}
-
-		[[nodiscard]] constexpr auto shiftUpRightRight() const -> Bitboard
-		{
-			return (m_board << shifts::Diagonal21RL) & ~(FileA | FileB);
-		}
-
-		[[nodiscard]] constexpr auto shiftDownLeftLeft() const -> Bitboard
-		{
-			return (m_board >> shifts::Diagonal21RL) & ~(FileG | FileH);
-		}
-
-		[[nodiscard]] constexpr auto shiftDownRightRight() const -> Bitboard
-		{
-			return (m_board >> shifts::Diagonal21LR) & ~(FileA | FileB);
-		}
-
-		[[nodiscard]] constexpr auto shiftDownDownLeft() const -> Bitboard
-		{
-			return (m_board >> shifts::Diagonal12RL) & ~FileH;
-		}
-
-		[[nodiscard]] constexpr auto shiftDownDownRight() const -> Bitboard
-		{
-			return (m_board >> shifts::Diagonal12LR) & ~FileA;
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto shiftUpRelative() const
-		{
-			if constexpr (C == Color::Black)
-				return shiftDown();
-			else return shiftUp();
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto shiftUpLeftRelative() const
-		{
-			if constexpr (C == Color::Black)
-				return shiftDownLeft();
-			else return shiftUpLeft();
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto shiftUpRightRelative() const
-		{
-			if constexpr (C == Color::Black)
-				return shiftDownRight();
-			else return shiftUpRight();
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto shiftDownRelative() const
-		{
-			if constexpr (C == Color::Black)
-				return shiftUp();
-			else return shiftDown();
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto shiftDownLeftRelative() const
-		{
-			if constexpr (C == Color::Black)
-				return shiftUpLeft();
-			else return shiftDownLeft();
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto shiftDownRightRelative() const
-		{
-			if constexpr (C == Color::Black)
-				return shiftUpRight();
-			else return shiftDownRight();
-		}
-
-		[[nodiscard]] constexpr auto fillUp() const -> Bitboard
-		{
-			auto b = m_board;
-			b |= b << 8;
-			b |= b << 16;
-			b |= b << 32;
-			return b;
-		}
-
-		[[nodiscard]] constexpr auto fillDown() const -> Bitboard
-		{
-			auto b = m_board;
-			b |= b >> 8;
-			b |= b >> 16;
-			b |= b >> 32;
-			return b;
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto fillUpRelative() const
-		{
-			if constexpr (C == Color::Black)
-				return fillDown();
-			else return fillUp();
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto fillDownRelative() const
-		{
-			if constexpr (C == Color::Black)
-				return fillUp();
-			else return fillDown();
-		}
-
-		[[nodiscard]] constexpr auto fillFile() const
-		{
-			return fillUp() | fillDown();
-		}
-
-		[[nodiscard]] constexpr auto operator==(const Bitboard &other) const
-		{
-			return m_board == other.m_board;
-		}
-
-		[[nodiscard]] constexpr auto operator==(u64 other) const
-		{
-			return m_board == other;
-		}
-
-		[[nodiscard]] constexpr auto operator==(i32 other) const
-		{
-			return m_board == other;
-		}
-
-		[[nodiscard]] constexpr static auto fromSquare(Square square) -> Bitboard
-		{
-			return squareBit(square);
-		}
-
-		[[nodiscard]] constexpr static auto fromSquareChecked(Square square) -> Bitboard
-		{
-			return squareBitChecked(square);
-		}
-
-	private:
-		u64 m_board;
-	};
-
-	namespace boards
-	{
-		constexpr Bitboard Rank1{Bitboard::Rank1};
-		constexpr Bitboard Rank2{Bitboard::Rank2};
-		constexpr Bitboard Rank3{Bitboard::Rank3};
-		constexpr Bitboard Rank4{Bitboard::Rank4};
-		constexpr Bitboard Rank5{Bitboard::Rank5};
-		constexpr Bitboard Rank6{Bitboard::Rank6};
-		constexpr Bitboard Rank7{Bitboard::Rank7};
-		constexpr Bitboard Rank8{Bitboard::Rank8};
-
-		constexpr Bitboard FileA{Bitboard::FileA};
-		constexpr Bitboard FileB{Bitboard::FileB};
-		constexpr Bitboard FileC{Bitboard::FileC};
-		constexpr Bitboard FileD{Bitboard::FileD};
-		constexpr Bitboard FileE{Bitboard::FileE};
-		constexpr Bitboard FileF{Bitboard::FileF};
-		constexpr Bitboard FileG{Bitboard::FileG};
-		constexpr Bitboard FileH{Bitboard::FileH};
-
-		constexpr auto Ranks = std::array{Rank1, Rank2, Rank3, Rank4, Rank5, Rank6, Rank7, Rank8};
-		constexpr auto Files = std::array{FileA, FileB, FileC, FileD, FileE, FileF, FileG, FileH};
-
-		constexpr Bitboard  DarkSquares{Bitboard:: DarkSquares};
-		constexpr Bitboard LightSquares{Bitboard::LightSquares};
-
-		constexpr Bitboard CenterSquares{Bitboard::CenterSquares};
-
-		constexpr Bitboard All{Bitboard::All};
-
-		template <Color C>
-		[[nodiscard]] constexpr auto promotionRank()
-		{
-			if constexpr (C == Color::Black)
-				return Rank1;
-			else return Rank8;
-		}
-
-		[[nodiscard]] constexpr auto promotionRank(Color c)
-		{
-			return c == Color::Black ? Rank1 : Rank8;
-		}
-
-		template <Color C>
-		[[nodiscard]] constexpr auto rank(i32 idx)
-		{
-			return Ranks[relativeRank<C>(idx)];
-		}
-	}
-}
+namespace oranj {
+    namespace offsets {
+        constexpr i32 kUp = 8;
+        constexpr i32 kDown = -8;
+        constexpr i32 kLeft = -1;
+        constexpr i32 kRight = 1;
+
+        constexpr auto kUpLeft = kUp + kLeft;
+        constexpr auto kUpRight = kUp + kRight;
+        constexpr auto kDownLeft = kDown + kLeft;
+        constexpr auto kDownRight = kDown + kRight;
+
+        constexpr i32 up(Color c) {
+            return c == Colors::kBlack ? kDown : kUp;
+        }
+
+        constexpr i32 upLeft(Color c) {
+            return c == Colors::kBlack ? kDownLeft : kUpLeft;
+        }
+
+        constexpr i32 upRight(Color c) {
+            return c == Colors::kBlack ? kDownRight : kUpRight;
+        }
+
+        constexpr i32 down(Color c) {
+            return c == Colors::kBlack ? kUp : kDown;
+        }
+
+        constexpr i32 downLeft(Color c) {
+            return c == Colors::kBlack ? kUpLeft : kDownLeft;
+        }
+
+        constexpr i32 downRight(Color c) {
+            return c == Colors::kBlack ? kUpRight : kDownRight;
+        }
+    } // namespace offsets
+
+    namespace shifts {
+        constexpr i32 kVertical = 8;
+        constexpr i32 kHorizontal = 1;
+
+        // '\'
+        constexpr auto kDiagonalLR = kVertical - kHorizontal;
+        // '/'
+        constexpr auto kDiagonalRL = kVertical + kHorizontal;
+
+        constexpr auto kDiagonal12LR = kVertical + kVertical - kHorizontal;
+        constexpr auto kDiagonal12RL = kVertical + kVertical + kHorizontal;
+        constexpr auto kDiagonal21LR = kVertical - kHorizontal - kHorizontal;
+        constexpr auto kDiagonal21RL = kVertical + kHorizontal + kHorizontal;
+    } // namespace shifts
+
+    class Biterator;
+    class RemainingBiteratorProxy;
+
+    class Bitboard {
+    public:
+        static constexpr auto kRank1 = U64(0x00000000000000FF);
+        static constexpr auto kRank2 = U64(0x000000000000FF00);
+        static constexpr auto kRank3 = U64(0x0000000000FF0000);
+        static constexpr auto kRank4 = U64(0x00000000FF000000);
+        static constexpr auto kRank5 = U64(0x000000FF00000000);
+        static constexpr auto kRank6 = U64(0x0000FF0000000000);
+        static constexpr auto kRank7 = U64(0x00FF000000000000);
+        static constexpr auto kRank8 = U64(0xFF00000000000000);
+
+        static constexpr auto kFileA = U64(0x0101010101010101);
+        static constexpr auto kFileB = U64(0x0202020202020202);
+        static constexpr auto kFileC = U64(0x0404040404040404);
+        static constexpr auto kFileD = U64(0x0808080808080808);
+        static constexpr auto kFileE = U64(0x1010101010101010);
+        static constexpr auto kFileF = U64(0x2020202020202020);
+        static constexpr auto kFileG = U64(0x4040404040404040);
+        static constexpr auto kFileH = U64(0x8080808080808080);
+
+        static constexpr auto kDarkSquares = U64(0xAA55AA55AA55AA55);
+        static constexpr auto kLightSquares = U64(0x55AA55AA55AA55AA);
+
+        static constexpr auto kCenterSquares = U64(0x0000001818000000);
+
+        static constexpr auto kNone = U64(0);
+        static constexpr auto kAll = U64(0xFFFFFFFFFFFFFFFF);
+
+        constexpr Bitboard(u64 board = 0) :
+                m_board{board} {}
+
+        [[nodiscard]] constexpr static Bitboard rank(i32 rank) {
+            assert(rank >= 0 && rank < 8);
+            return {kRank1 << (rank * 8)};
+        }
+
+        [[nodiscard]] constexpr static Bitboard file(i32 file) {
+            assert(file >= 0 && file < 8);
+            return {kFileA << file};
+        }
+
+        [[nodiscard]] constexpr operator u64() const {
+            return m_board;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator&(Bitboard rhs) const {
+            return m_board & rhs;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator|(Bitboard rhs) const {
+            return m_board | rhs;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator^(Bitboard rhs) const {
+            return m_board ^ rhs;
+        }
+
+        constexpr Bitboard& operator&=(Bitboard rhs) {
+            m_board &= rhs;
+            return *this;
+        }
+
+        constexpr Bitboard& operator|=(Bitboard rhs) {
+            m_board |= rhs;
+            return *this;
+        }
+
+        constexpr Bitboard& operator^=(Bitboard rhs) {
+            m_board ^= rhs;
+            return *this;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator&(u64 rhs) const {
+            return m_board & rhs;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator|(u64 rhs) const {
+            return m_board | rhs;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator^(u64 rhs) const {
+            return m_board ^ rhs;
+        }
+
+        constexpr Bitboard& operator&=(u64 rhs) {
+            m_board &= rhs;
+            return *this;
+        }
+
+        constexpr Bitboard& operator|=(u64 rhs) {
+            m_board |= rhs;
+            return *this;
+        }
+
+        constexpr Bitboard& operator^=(u64 rhs) {
+            m_board ^= rhs;
+            return *this;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator&(i32 rhs) const {
+            return m_board & static_cast<u64>(rhs);
+        }
+
+        [[nodiscard]] constexpr Bitboard operator|(i32 rhs) const {
+            return m_board | static_cast<u64>(rhs);
+        }
+
+        [[nodiscard]] constexpr Bitboard operator^(i32 rhs) const {
+            return m_board ^ static_cast<u64>(rhs);
+        }
+
+        constexpr Bitboard& operator&=(i32 rhs) {
+            m_board &= static_cast<u64>(rhs);
+            return *this;
+        }
+
+        constexpr Bitboard& operator|=(i32 rhs) {
+            m_board |= static_cast<u64>(rhs);
+            return *this;
+        }
+
+        constexpr Bitboard& operator^=(i32 rhs) {
+            m_board ^= static_cast<u64>(rhs);
+            return *this;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator~() const {
+            return ~m_board;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator<<(i32 rhs) const {
+            return m_board << rhs;
+        }
+
+        [[nodiscard]] constexpr Bitboard operator>>(i32 rhs) const {
+            return m_board >> rhs;
+        }
+
+        constexpr Bitboard& operator<<=(i32 rhs) {
+            m_board <<= rhs;
+            return *this;
+        }
+
+        constexpr Bitboard& operator>>=(i32 rhs) {
+            m_board >>= rhs;
+            return *this;
+        }
+
+        [[nodiscard]] constexpr bool hasSq(Square sq) const {
+            return (m_board & sq.bit()) != 0;
+        }
+
+        constexpr Bitboard& setSq(Square sq) {
+            m_board |= sq.bit();
+            return *this;
+        }
+
+        constexpr Bitboard& clearSq(Square sq) {
+            m_board &= ~sq.bit();
+            return *this;
+        }
+
+        constexpr Bitboard& flipSq(Square sq) {
+            m_board ^= sq.bit();
+            return *this;
+        }
+
+        [[nodiscard]] constexpr i32 popcount() const {
+            return std::popcount(m_board);
+        }
+
+        [[nodiscard]] constexpr bool empty() const {
+            return m_board == 0;
+        }
+
+        [[nodiscard]] constexpr bool multiple() const {
+            return util::resetLsb(m_board) != 0;
+        }
+
+        [[nodiscard]] constexpr bool one() const {
+            return !empty() && !multiple();
+        }
+
+        [[nodiscard]] constexpr Square lowestSquare() const {
+            return Square::fromRaw(util::ctz(m_board));
+        }
+
+        [[nodiscard]] constexpr Bitboard lowestBit() const {
+            return util::isolateLsb(m_board);
+        }
+
+        constexpr Square popLowestSquare() {
+            const auto sq = lowestSquare();
+            m_board = util::resetLsb(m_board);
+            return sq;
+        }
+
+        constexpr Bitboard popLowestBit() {
+            const auto bit = lowestBit();
+            m_board = util::resetLsb(m_board);
+            return bit;
+        }
+
+        constexpr void clear() {
+            m_board = 0;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUp() const {
+            return m_board << shifts::kVertical;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDown() const {
+            return m_board >> shifts::kVertical;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftLeft() const {
+            return (m_board >> shifts::kHorizontal) & ~kFileH;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftLeftUnchecked() const {
+            return m_board >> shifts::kHorizontal;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftRight() const {
+            return (m_board << shifts::kHorizontal) & ~kFileA;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftRightUnchecked() const {
+            return m_board << shifts::kHorizontal;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpLeft() const {
+            return (m_board << shifts::kDiagonalLR) & ~kFileH;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpRight() const {
+            return (m_board << shifts::kDiagonalRL) & ~kFileA;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownLeft() const {
+            return (m_board >> shifts::kDiagonalRL) & ~kFileH;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownRight() const {
+            return (m_board >> shifts::kDiagonalLR) & ~kFileA;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpUpLeft() const {
+            return (m_board << shifts::kDiagonal12LR) & ~kFileH;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpUpRight() const {
+            return (m_board << shifts::kDiagonal12RL) & ~kFileA;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpLeftLeft() const {
+            return (m_board << shifts::kDiagonal21LR) & ~(kFileG | kFileH);
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpRightRight() const {
+            return (m_board << shifts::kDiagonal21RL) & ~(kFileA | kFileB);
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownLeftLeft() const {
+            return (m_board >> shifts::kDiagonal21RL) & ~(kFileG | kFileH);
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownRightRight() const {
+            return (m_board >> shifts::kDiagonal21LR) & ~(kFileA | kFileB);
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownDownLeft() const {
+            return (m_board >> shifts::kDiagonal12RL) & ~kFileH;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownDownRight() const {
+            return (m_board >> shifts::kDiagonal12LR) & ~kFileA;
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpRelative(Color c) const {
+            if (c == Colors::kBlack) {
+                return shiftDown();
+            } else {
+                return shiftUp();
+            }
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpLeftRelative(Color c) const {
+            if (c == Colors::kBlack) {
+                return shiftDownLeft();
+            } else {
+                return shiftUpLeft();
+            }
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftUpRightRelative(Color c) const {
+            if (c == Colors::kBlack) {
+                return shiftDownRight();
+            } else {
+                return shiftUpRight();
+            }
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownRelative(Color c) const {
+            if (c == Colors::kBlack) {
+                return shiftUp();
+            } else {
+                return shiftDown();
+            }
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownLeftRelative(Color c) const {
+            if (c == Colors::kBlack) {
+                return shiftUpLeft();
+            } else {
+                return shiftDownLeft();
+            }
+        }
+
+        [[nodiscard]] constexpr Bitboard shiftDownRightRelative(Color c) const {
+            if (c == Colors::kBlack) {
+                return shiftUpRight();
+            } else {
+                return shiftDownRight();
+            }
+        }
+
+        [[nodiscard]] constexpr Bitboard fillUp() const {
+            auto b = m_board;
+            b |= b << 8;
+            b |= b << 16;
+            b |= b << 32;
+            return b;
+        }
+
+        [[nodiscard]] constexpr Bitboard fillDown() const {
+            auto b = m_board;
+            b |= b >> 8;
+            b |= b >> 16;
+            b |= b >> 32;
+            return b;
+        }
+
+        [[nodiscard]] constexpr Bitboard fillUpRelative(Color c) const {
+            if (c == Colors::kBlack) {
+                return fillDown();
+            } else {
+                return fillUp();
+            }
+        }
+
+        [[nodiscard]] constexpr Bitboard fillDownRelative(Color c) const {
+            if (c == Colors::kBlack) {
+                return fillUp();
+            } else {
+                return fillDown();
+            }
+        }
+
+        [[nodiscard]] constexpr Bitboard fillFile() const {
+            return fillUp() | fillDown();
+        }
+
+        [[nodiscard]] constexpr bool operator==(const Bitboard& other) const {
+            return m_board == other.m_board;
+        }
+
+        [[nodiscard]] constexpr bool operator==(u64 other) const {
+            return m_board == other;
+        }
+
+        [[nodiscard]] constexpr bool operator==(i32 other) const {
+            return m_board == other;
+        }
+
+        [[nodiscard]] constexpr static Bitboard fromSquare(Square sq) {
+            return sq.bit();
+        }
+
+        [[nodiscard]] constexpr Biterator begin() const;
+        [[nodiscard]] constexpr Biterator end() const;
+
+        [[nodiscard]] constexpr RemainingBiteratorProxy iterWithRemaining() const;
+
+    private:
+        u64 m_board;
+    };
+
+    class Biterator {
+    public:
+        constexpr Biterator& operator++() {
+            m_bb.popLowestSquare();
+            return *this;
+        }
+
+        [[nodiscard]] constexpr Square operator*() const {
+            return m_bb.lowestSquare();
+        }
+
+        constexpr bool operator==(const Biterator&) const = default;
+
+    private:
+        explicit constexpr Biterator(Bitboard bb) :
+                m_bb{bb} {}
+
+        Bitboard m_bb;
+
+        friend class Bitboard;
+    };
+
+    constexpr Biterator Bitboard::begin() const {
+        return Biterator{*this};
+    }
+
+    constexpr Biterator Bitboard::end() const {
+        return Biterator{Bitboard{}};
+    }
+
+    class RemainingBiterator {
+    public:
+        constexpr RemainingBiterator& operator++() {
+            m_nextSq = m_bb ? m_bb.popLowestSquare() : Squares::kNone;
+            return *this;
+        }
+
+        [[nodiscard]] constexpr std::pair<Square, Bitboard> operator*() const {
+            assert(!m_bb.hasSq(m_nextSq));
+            return {m_nextSq, m_bb};
+        }
+
+        constexpr bool operator==(const RemainingBiterator&) const = default;
+
+    private:
+        explicit constexpr RemainingBiterator(Bitboard bb) :
+                m_bb{bb} {
+            ++*this;
+        }
+
+        Bitboard m_bb;
+        Square m_nextSq;
+
+        friend class RemainingBiteratorProxy;
+    };
+
+    class RemainingBiteratorProxy {
+    public:
+        [[nodiscard]] constexpr RemainingBiterator begin() const {
+            return RemainingBiterator{m_bb};
+        }
+
+        [[nodiscard]] constexpr RemainingBiterator end() const {
+            return RemainingBiterator{Bitboard{}};
+        }
+
+    private:
+        explicit constexpr RemainingBiteratorProxy(Bitboard bb) :
+                m_bb{bb} {}
+
+        Bitboard m_bb;
+
+        friend class Bitboard;
+    };
+
+    constexpr RemainingBiteratorProxy Bitboard::iterWithRemaining() const {
+        return RemainingBiteratorProxy{*this};
+    }
+
+    namespace boards {
+        constexpr Bitboard kRank1{Bitboard::kRank1};
+        constexpr Bitboard kRank2{Bitboard::kRank2};
+        constexpr Bitboard kRank3{Bitboard::kRank3};
+        constexpr Bitboard kRank4{Bitboard::kRank4};
+        constexpr Bitboard kRank5{Bitboard::kRank5};
+        constexpr Bitboard kRank6{Bitboard::kRank6};
+        constexpr Bitboard kRank7{Bitboard::kRank7};
+        constexpr Bitboard kRank8{Bitboard::kRank8};
+
+        constexpr Bitboard kFileA{Bitboard::kFileA};
+        constexpr Bitboard kFileB{Bitboard::kFileB};
+        constexpr Bitboard kFileC{Bitboard::kFileC};
+        constexpr Bitboard kFileD{Bitboard::kFileD};
+        constexpr Bitboard kFileE{Bitboard::kFileE};
+        constexpr Bitboard kFileF{Bitboard::kFileF};
+        constexpr Bitboard kFileG{Bitboard::kFileG};
+        constexpr Bitboard kFileH{Bitboard::kFileH};
+
+        constexpr std::array kRanks = {kRank1, kRank2, kRank3, kRank4, kRank5, kRank6, kRank7, kRank8};
+        constexpr std::array kFiles = {kFileA, kFileB, kFileC, kFileD, kFileE, kFileF, kFileG, kFileH};
+
+        constexpr Bitboard kDarkSquares{Bitboard::kDarkSquares};
+        constexpr Bitboard kLightSquares{Bitboard::kLightSquares};
+
+        constexpr Bitboard kCenterSquares{Bitboard::kCenterSquares};
+
+        constexpr Bitboard kAll{Bitboard::kAll};
+
+        [[nodiscard]] constexpr Bitboard promotionRank(Color c) {
+            return c == Colors::kBlack ? kRank1 : kRank8;
+        }
+
+        [[nodiscard]] constexpr Bitboard rank(Color c, i32 idx) {
+            return kRanks[relativeRank(c, idx)];
+        }
+    } // namespace boards
+} // namespace oranj
+
+template <>
+struct fmt::formatter<oranj::Bitboard> : fmt::formatter<std::string_view> {
+    constexpr auto format(const oranj::Bitboard& value, format_context& ctx) const {
+        for (oranj::i32 rank = 7; rank >= 0; --rank) {
+            for (oranj::i32 file = 0; file < 8; ++file) {
+                if (file > 0) {
+                    format_to(ctx.out(), " ");
+                }
+
+                format_to(ctx.out(), "{}", value.hasSq(oranj::Square::fromFileRank(file, rank)) ? '1' : '.');
+            }
+
+            format_to(ctx.out(), "\n");
+        }
+
+        return ctx.out();
+    }
+};

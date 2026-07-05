@@ -1,0 +1,179 @@
+ifneq ($(IS_CALLED_FROM_MAKEFILE), yea)
+    $(error Use Makefile, rather than build.mk!)
+endif
+
+TYPE = native
+
+COMMIT_HASH = off
+DISABLE_NEON_DOTPROD = off
+USE_LIBNUMA = off
+
+# https://stackoverflow.com/a/1825832
+rwildcard = $(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
+
+SOURCES_3RDPARTY := 3rdparty/fmt/src/format.cc 3rdparty/pyrrhic/tbprobe.cpp 3rdparty/zstd/zstddeclib.c
+SOURCES_PERMUTE := preprocess/permute.cpp 3rdparty/fmt/src/format.cc
+
+HEADERS := $(call rwildcard,src,*.h)
+SOURCES := $(call rwildcard,src,*.cpp)
+
+# Sources including 3rdparty
+SOURCES_ALL := $(SOURCES) $(SOURCES_3RDPARTY)
+
+CFLAGS := -std=c11
+CXXFLAGS := -std=c++20 -fconstexpr-steps=2097152
+
+CXXFLAGS_PERMUTE := $(CXXFLAGS) -O1 -DNDEBUG
+
+CFLAGS_ENGINE := $(CFLAGS)
+CXXFLAGS_ENGINE := $(CXXFLAGS)
+
+# disable -Wunused-function and -Wunused-const-variable for zstd
+FLAGS := -I3rdparty/fmt/include -Wall -Wextra -Wno-sign-compare -Wno-unused-function -Wno-unused-const-variable -DOJ_VERSION=$(VERSION)
+
+FLAGS_NATIVE := -DOJ_NATIVE -march=native
+FLAGS_TUNABLE := -DOJ_NATIVE -march=native -DOJ_EXTERNAL_TUNE=1
+FLAGS_AVX512 := -DOJ_AVX512 -DOJ_FAST_PEXT -march=icelake-client -mtune=znver4
+FLAGS_AVX2_BMI2 := -DOJ_AVX2_BMI2 -DOJ_FAST_PEXT -march=haswell -mtune=znver3
+FLAGS_ZEN2 := -DOJ_ZEN2 -march=bdver4 -mno-tbm -mno-sse4a -mtune=znver2
+FLAGS_ARMV8_4 := -DOJ_ARMV8_4 -march=armv8.4-a
+FLAGS_APPLE_M1 := -DOJ_ARMV8_4 -mcpu=apple-m1 --target=arm64-apple-macos11
+
+ENGINE_FLAGS_RELEASE := -O3 -flto -DNDEBUG
+ENGINE_FLAGS_SANITIZER := -O1 -flto -g -fsanitize=address,undefined
+
+ifdef NO_EXE_SET
+    EXE := $(EXE)-$(TYPE)
+endif
+
+LDFLAGS :=
+
+CC_VERSION := $(shell $(CC) --version)
+ifeq (, $(findstring clang, $(CC_VERSION)))
+	$(error Only Clang supported)
+endif
+
+CXX_VERSION := $(shell $(CXX) --version)
+ifeq (, $(findstring clang, $(CXX_VERSION)))
+	$(error Only Clang supported)
+endif
+
+MKDIR := mkdir -p
+
+ifeq ($(DETECTED_OS), Windows)
+    SUFFIX := .exe
+    RM := del
+    ifeq (.exe,$(findstring .exe,$(SHELL)))
+        MKDIR := -mkdir
+    endif
+else
+    SUFFIX :=
+    RM := rm
+    LDFLAGS += -pthread
+endif
+
+ifneq ($(DETECTED_OS), Darwin)
+	LDFLAGS += -fuse-ld=lld
+endif
+
+ARCH_DEFINES := $(shell echo | $(CXX) -march=native -E -dM -)
+
+ifneq ($(findstring __BMI2__, $(ARCH_DEFINES)),)
+    ifeq ($(findstring __znver1, $(ARCH_DEFINES)),)
+        ifeq ($(findstring __znver2, $(ARCH_DEFINES)),)
+            ifeq ($(findstring __bdver, $(ARCH_DEFINES)),)
+                FLAGS_NATIVE += -DOJ_FAST_PEXT
+            endif
+        endif
+    endif
+endif
+
+ifeq ($(COMMIT_HASH),on)
+    FLAGS += -DOJ_COMMIT_HASH=$(shell git log -1 --pretty=format:%h)
+endif
+
+ifeq ($(USE_LIBNUMA),on)
+	FLAGS += -DOJ_USE_LIBNUMA
+	LDFLAGS += -lnuma
+endif
+
+OUTFILE = $(subst .exe,,$(EXE))$(SUFFIX)
+
+ifeq ($(TYPE), native)
+    FLAGS += $(FLAGS_NATIVE)
+    ENGINE_FLAGS += $(ENGINE_FLAGS_RELEASE)
+else ifeq ($(TYPE), tunable)
+    FLAGS += $(FLAGS_TUNABLE)
+    ENGINE_FLAGS += $(ENGINE_FLAGS_RELEASE)
+else ifeq ($(TYPE), sanitizer)
+    FLAGS += $(FLAGS_AVX2_BMI2)
+    ENGINE_FLAGS += $(ENGINE_FLAGS_SANITIZER)
+else ifeq ($(TYPE), avx512)
+    FLAGS += $(FLAGS_AVX512)
+    ENGINE_FLAGS += $(ENGINE_FLAGS_RELEASE)
+else ifeq ($(TYPE), avx2-bmi2)
+    FLAGS += $(FLAGS_AVX2_BMI2)
+    ENGINE_FLAGS += $(ENGINE_FLAGS_RELEASE)
+else ifeq ($(TYPE), zen2)
+    FLAGS += $(FLAGS_ZEN2)
+    ENGINE_FLAGS += $(ENGINE_FLAGS_RELEASE)
+else ifeq ($(TYPE), armv8-4)
+    FLAGS += $(FLAGS_ARMV8_4)
+    ENGINE_FLAGS += $(ENGINE_FLAGS_RELEASE)
+else ifeq ($(TYPE), apple-m1)
+    FLAGS += $(FLAGS_APPLE_M1)
+    ENGINE_FLAGS += $(ENGINE_FLAGS_RELEASE)
+else
+    $(error Unknown build type)
+endif
+
+CXXFLAGS_PERMUTE += $(FLAGS) $(PERMUTE_FLAGS)
+
+CFLAGS_ENGINE += $(FLAGS) $(ENGINE_FLAGS)
+CXXFLAGS_ENGINE += $(FLAGS) $(ENGINE_FLAGS)
+
+BUILD_DIR := build-$(TYPE)
+OBJECTS := $(addprefix $(BUILD_DIR)/,$(filter %.o,$(SOURCES_ALL:.c=.o) $(SOURCES_ALL:.cpp=.o) $(SOURCES_ALL:.cc=.o)))
+
+define create_mkdir_target
+$1:
+	$(MKDIR) "$1"
+
+.PRECIOUS: $1
+endef
+
+$(foreach dir,$(sort $(dir $(OBJECTS))),$(eval $(call create_mkdir_target,$(dir))))
+
+tmp:
+	$(MKDIR) tmp
+
+EVALFILE_NAME := $(notdir $(EVALFILE))
+
+.DEFAULT_GOAL := $(OUTFILE)
+
+.SECONDEXPANSION:
+
+tmp/permute-$(TYPE): tmp $(SOURCES_PERMUTE)
+	$(CXX) $(CXXFLAGS_PERMUTE) $(LDFLAGS) -o tmp/permute-$(TYPE) $(filter-out $<,$^)
+
+tmp/$(EVALFILE_NAME)_permuted_$(TYPE): $(EVALFILE) tmp/permute-$(TYPE)
+	tmp/permute-$(TYPE) $< $@
+
+$(BUILD_DIR)/%.o: %.c version.txt tmp/$(EVALFILE_NAME)_permuted_$(TYPE) | $$(@D)/
+	$(CC) $(CFLAGS_ENGINE) -DOJ_NETWORK_FILE=\"tmp/$(EVALFILE_NAME)_permuted_$(TYPE)\" -c -o $@ $<
+
+$(BUILD_DIR)/%.o: %.cpp version.txt tmp/$(EVALFILE_NAME)_permuted_$(TYPE) | $$(@D)/
+	$(CXX) $(CXXFLAGS_ENGINE) -DOJ_NETWORK_FILE=\"tmp/$(EVALFILE_NAME)_permuted_$(TYPE)\" -c -o $@ $<
+
+$(BUILD_DIR)/%.o: %.cc version.txt tmp/$(EVALFILE_NAME)_permuted_$(TYPE) | $$(@D)/
+	$(CXX) $(CXXFLAGS_ENGINE) -DOJ_NETWORK_FILE=\"tmp/$(EVALFILE_NAME)_permuted_$(TYPE)\" -c -o $@ $<
+
+$(OUTFILE): $(OBJECTS)
+	$(CXX) $(CXXFLAGS_ENGINE) $(LDFLAGS) -o $(OUTFILE) $(OBJECTS)
+
+bench: $(OUTFILE)
+	./$(OUTFILE) bench
+
+format: $(HEADERS) $(SOURCES) preprocess/permute.cpp
+	clang-format -i $^
+

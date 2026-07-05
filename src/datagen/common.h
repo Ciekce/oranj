@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,12 +20,10 @@
 
 #include "../types.h"
 
-namespace oranj::datagen
-{
-	enum class Outcome : u8
-	{
-		WhiteLoss = 0,
-		Draw,
-		WhiteWin
-	};
+namespace oranj::datagen {
+    enum class Outcome : u8 {
+        kWhiteLoss = 0,
+        kDraw,
+        kWhiteWin,
+    };
 }

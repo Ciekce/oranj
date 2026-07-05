@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,28 +22,25 @@
 
 #include <vector>
 
-#include "format.h"
-#include "../position/position.h"
+#include "../position.h"
 #include "../util/u4array.h"
+#include "format.h"
 
-namespace oranj::datagen
-{
-	class Fen
-	{
-	public:
-		Fen();
-		~Fen() = default;
+namespace oranj::datagen {
+    class Fen {
+    public:
+        Fen();
 
-		static constexpr auto Extension = "txt";
+        static constexpr auto kExtension = "txt";
 
-		auto start(const Position &initialPosition) -> void;
-		auto push(bool filtered, Move move, Score score) -> void;
-		auto writeAllWithOutcome(std::ostream &stream, Outcome outcome) -> usize;
+        void start(const Position& initialPosition);
+        void push(bool filtered, Move move, Score score);
+        usize writeAllWithOutcome(std::ostream& stream, Outcome outcome);
 
-	private:
-		std::vector<std::string> m_positions{};
-		Position m_curr;
-	};
+    private:
+        std::vector<std::string> m_positions{};
+        Position m_curr;
+    };
 
-	static_assert(OutputFormat<Fen>);
-}
+    static_assert(OutputFormat<Fen>);
+} // namespace oranj::datagen

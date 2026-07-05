@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,20 +18,16 @@
 
 #include "opts.h"
 
-namespace oranj
-{
-	namespace
-	{
-		opts::GlobalOptions s_opts{};
-	}
+namespace oranj {
+    namespace {
+        opts::GlobalOptions s_opts{};
+    }
 
-	namespace opts
-	{
-		auto mutableOpts() -> GlobalOptions &
-		{
-			return s_opts;
-		}
-	}
+    namespace opts {
+        GlobalOptions& mutableOpts() {
+            return s_opts;
+        }
+    } // namespace opts
 
-	const opts::GlobalOptions &g_opts = s_opts;
-}
+    const opts::GlobalOptions& g_opts = s_opts;
+} // namespace oranj

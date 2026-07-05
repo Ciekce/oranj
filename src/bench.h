@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,15 +22,14 @@
 
 #include "search.h"
 
-namespace oranj::bench
-{
-#ifdef OJ_PGO_PROFILE
-	constexpr i32 DefaultBenchDepth = 14;
+namespace oranj::bench {
+#if OJ_SPARSE_BENCH_L1_SIZE > 0
+    constexpr i32 kDefaultBenchDepth = 17;
 #else
-	constexpr i32 DefaultBenchDepth = 20;
+    constexpr i32 kDefaultBenchDepth = 13;
 #endif
 
-	constexpr usize DefaultBenchTtSize = 16;
+    constexpr usize kDefaultBenchTtSize = 16;
 
-	auto run(search::Searcher &searcher, i32 depth = DefaultBenchDepth) -> void;
-}
+    void run(i32 depth = kDefaultBenchDepth, usize ttSize = kDefaultBenchTtSize);
+} // namespace oranj::bench

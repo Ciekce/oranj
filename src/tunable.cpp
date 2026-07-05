@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,53 +18,80 @@
 
 #include "tunable.h"
 
+#include <algorithm>
 #include <cmath>
 
-namespace oranj::tunable
-{
-	namespace
-	{
-		inline auto lmrReduction(f64 base, f64 divisor, i32 depth, i32 moves)
-		{
-			const auto lnDepth = std::log(static_cast<f64>(depth));
-			const auto lnMoves = std::log(static_cast<f64>(moves));
-			return static_cast<i32>(128.0 * (base + lnDepth * lnMoves / divisor));
-		}
-	}
+namespace oranj::tunable {
+    namespace {
+        inline i32 lmrReduction(f64 base, f64 divisor, i32 depth, i32 moves) {
+            const auto lnDepth = std::log(static_cast<f64>(depth));
+            const auto lnMoves = std::log(static_cast<f64>(moves));
+            return static_cast<i32>(1024.0 * (base + lnDepth * lnMoves / divisor));
+        }
+    } // namespace
 
-	util::MultiArray<i32, 2, 256, 256> g_lmrTable{};
+    util::MultiArray<i32, 2, 256, 256> g_lmrTable{};
+    std::array<i32, 13> g_seeValues{};
+    std::array<PieceType, PieceTypes::kCount> g_seeOrderedPts{};
 
-	auto updateQuietLmrTable() -> void
-	{
-		const auto base = static_cast<f64>(quietLmrBase()) / 100.0;
-		const auto divisor = static_cast<f64>(quietLmrDivisor()) / 100.0;
+    void updateQuietLmrTable() {
+        const auto base = static_cast<f64>(quietLmrBase()) / 100.0;
+        const auto divisor = static_cast<f64>(quietLmrDivisor()) / 100.0;
 
-		for (i32 depth = 1; depth < 256; ++depth)
-		{
-			for (i32 moves = 1; moves < 256; ++moves)
-			{
-				g_lmrTable[0][depth][moves] = lmrReduction(base, divisor, depth, moves);
-			}
-		}
-	}
+        for (i32 depth = 1; depth < 256; ++depth) {
+            for (i32 moves = 1; moves < 256; ++moves) {
+                g_lmrTable[0][depth][moves] = lmrReduction(base, divisor, depth, moves);
+            }
+        }
+    }
 
-	auto updateNoisyLmrTable() -> void
-	{
-		const auto base = static_cast<f64>(noisyLmrBase()) / 100.0;
-		const auto divisor = static_cast<f64>(noisyLmrDivisor()) / 100.0;
+    void updateNoisyLmrTable() {
+        const auto base = static_cast<f64>(noisyLmrBase()) / 100.0;
+        const auto divisor = static_cast<f64>(noisyLmrDivisor()) / 100.0;
 
-		for (i32 depth = 1; depth < 256; ++depth)
-		{
-			for (i32 moves = 1; moves < 256; ++moves)
-			{
-				g_lmrTable[1][depth][moves] = lmrReduction(base, divisor, depth, moves);
-			}
-		}
-	}
+        for (i32 depth = 1; depth < 256; ++depth) {
+            for (i32 moves = 1; moves < 256; ++moves) {
+                g_lmrTable[1][depth][moves] = lmrReduction(base, divisor, depth, moves);
+            }
+        }
+    }
 
-	auto init() -> void
-	{
-		updateQuietLmrTable();
-		updateNoisyLmrTable();
-	}
-}
+    void updateSeeTables() {
+        g_seeValues.fill(0);
+
+        const std::array values = {
+            seeValuePawn(),
+            seeValueKnight(),
+            seeValueBishop(),
+            seeValueRook(),
+            seeValueQueen(),
+        };
+
+        for (usize i = 0; i < values.size(); ++i) {
+            g_seeValues[i * 2 + 0] = values[i];
+            g_seeValues[i * 2 + 1] = values[i];
+        }
+
+        g_seeOrderedPts = {
+            PieceTypes::kPawn,
+            PieceTypes::kKnight,
+            PieceTypes::kBishop,
+            PieceTypes::kRook,
+            PieceTypes::kQueen,
+            PieceTypes::kKing,
+        };
+
+        std::ranges::stable_sort(g_seeOrderedPts, [&](PieceType a, PieceType b) {
+            return b == PieceTypes::kKing
+                || (a != PieceTypes::kKing
+                    && (values[a.idx()] * 10000 + a.idx()) < (values[b.idx()] * 10000 + b.idx()));
+        });
+    }
+
+    void init() {
+        updateQuietLmrTable();
+        updateNoisyLmrTable();
+
+        updateSeeTables();
+    }
+} // namespace oranj::tunable

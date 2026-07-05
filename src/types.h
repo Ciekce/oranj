@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,28 +18,67 @@
 
 #pragma once
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
 
-namespace oranj
-{
-	using u8 = std::uint8_t;
-	using u16 = std::uint16_t;
-	using u32 = std::uint32_t;
-	using u64 = std::uint64_t;
-	using u128 = unsigned __int128;
+#include <fmt/format.h>
 
-	using i8 = std::int8_t;
-	using i16 = std::int16_t;
-	using i32 = std::int32_t;
-	using i64 = std::int64_t;
-	using i128 = __int128;
+namespace oranj {
+    using u8 = std::uint8_t;
+    using u16 = std::uint16_t;
+    using u32 = std::uint32_t;
+    using u64 = std::uint64_t;
+    using u128 = unsigned __int128;
 
-	using f32 = float;
-	using f64 = double;
+    using i8 = std::int8_t;
+    using i16 = std::int16_t;
+    using i32 = std::int32_t;
+    using i64 = std::int64_t;
+    using i128 = __int128;
 
-	using usize = std::size_t;
-}
+    using f32 = float;
+    using f64 = double;
+
+    using usize = std::size_t;
+
+    [[noreturn]] inline void unimplemented() {
+        std::terminate();
+    }
+
+    template <typename... Args>
+    inline void print(fmt::format_string<Args...> fmt, Args&&... args) {
+        fmt::print(fmt, std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    inline void println(fmt::format_string<Args...> fmt, Args&&... args) {
+        fmt::println(fmt, std::forward<Args>(args)...);
+        std::fflush(stdout);
+    }
+
+    inline void println() {
+        fmt::println("");
+        std::fflush(stdout);
+    }
+
+    template <typename... Args>
+    inline void eprint(fmt::format_string<Args...> fmt, Args&&... args) {
+        fmt::print(stderr, fmt, std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    inline void eprintln(fmt::format_string<Args...> fmt, Args&&... args) {
+        fmt::println(stderr, fmt, std::forward<Args>(args)...);
+        std::fflush(stderr);
+    }
+
+    inline void eprintln() {
+        fmt::println(stderr, "");
+        std::fflush(stderr);
+    }
+} // namespace oranj
 
 #define I64(V) INT64_C(V)
 #define U64(V) UINT64_C(V)
@@ -47,8 +86,10 @@ namespace oranj
 #define OJ_STRINGIFY_(S) #S
 #define OJ_STRINGIFY(S) OJ_STRINGIFY_(S)
 
+#define OJ_UNUSED(...) (void)sizeof(__VA_ARGS__)
+
 #ifndef NDEBUG
-#define OJ_ALWAYS_INLINE_NDEBUG
+    #define OJ_ALWAYS_INLINE_NDEBUG
 #else
-#define OJ_ALWAYS_INLINE_NDEBUG __attribute__((always_inline))
+    #define OJ_ALWAYS_INLINE_NDEBUG __attribute__((always_inline))
 #endif

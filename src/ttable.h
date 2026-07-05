@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,131 +20,135 @@
 
 #include "types.h"
 
-#include <vector>
+#include <array>
 #include <atomic>
-#include <cstring>
 #include <bit>
 
+#include "arch.h"
 #include "core.h"
 #include "move.h"
 #include "util/range.h"
-#include "arch.h"
 
-namespace oranj
-{
-	constexpr usize DefaultTtSizeMib = 64;
-	constexpr util::Range<usize> TtSizeMibRange{1, 131072};
+namespace oranj {
+    constexpr i32 kDefaultTtSizeMib = 64;
+    constexpr util::Range<i32> kTtSizeMibRange{1, 67108864};
 
-	enum class TtFlag : u8
-	{
-		None = 0,
-		UpperBound,
-		LowerBound,
-		Exact
-	};
+    enum class TtFlag : u8 {
+        kNone = 0,
+        kUpperBound,
+        kLowerBound,
+        kExact,
+    };
 
-	struct ProbedTTableEntry
-	{
-		Score score;
-		Score staticEval;
-		i32 depth;
-		Move move;
-		bool wasPv;
-		TtFlag flag;
-	};
+    struct ProbedTTableEntry {
+        Score score;
+        Score staticEval;
+        i32 depth;
+        Move move;
+        bool wasPv;
+        TtFlag flag;
+    };
 
-	class TTable
-	{
-	public:
-		explicit TTable(usize mib = DefaultTtSizeMib);
-		~TTable();
+    class TTable {
+    public:
+        explicit TTable(usize mib = kDefaultTtSizeMib);
+        ~TTable();
 
-		auto resize(usize mib) -> void;
-		auto finalize() -> bool;
+        void resize(usize mib);
+        bool finalize();
 
-		auto probe(ProbedTTableEntry &dst, u64 key, i32 ply) const -> bool;
-		auto put(u64 key, Score score, Score staticEval, Move move, i32 depth, i32 ply, TtFlag flag, bool pv) -> void;
+        bool probe(ProbedTTableEntry& dst, u64 key, i32 ply, i32 halfmove) const;
+        void put(u64 key, Score score, Score staticEval, Move move, i32 depth, i32 ply, TtFlag flag, bool pv);
 
-		inline auto age()
-		{
-			m_age = (m_age + 1) % (1 << Entry::AgeBits);
-		}
+        inline void putStaticEval(u64 key, Score staticEval, bool pv) {
+            static constexpr i32 kStaticEvalDepth = -kDepthOffset + 1;
+            put(key, kScoreNone, staticEval, kNullMove, kStaticEvalDepth, 0, TtFlag::kNone, pv);
+        }
 
-		auto clear() -> void;
+        inline void age() {
+            m_age = (m_age + 1) % (1 << Entry::kAgeBits);
+        }
 
-		[[nodiscard]] auto full() const -> u32;
+        void clear();
 
-		inline auto prefetch(u64 key)
-		{
-			__builtin_prefetch(&m_clusters[index(key)]);
-		}
+        [[nodiscard]] u32 full() const;
 
-	private:
-		struct Entry
-		{
-			static constexpr u32 AgeBits = 5;
+        inline void prefetch(u64 key) {
+            __builtin_prefetch(&m_clusters[index(key)]);
+        }
 
-			static constexpr u32 AgeCycle = 1 << AgeBits;
-			static constexpr u32 AgeMask = AgeCycle - 1;
+    private:
+        static constexpr i32 kDepthOffset = 7;
 
-			u16 key;
-			i16 score;
-			i16 staticEval;
-			Move move;
-			u8 depth;
-			u8 agePvFlag;
+        struct Entry {
+            static constexpr u32 kAgeBits = 5;
 
-			[[nodiscard]] inline auto age() const
-			{
-				return static_cast<u32>(agePvFlag >> 3);
-			}
+            static constexpr u32 kAgeCycle = 1 << kAgeBits;
+            static constexpr u32 kAgeMask = kAgeCycle - 1;
 
-			[[nodiscard]] inline auto pv() const
-			{
-				return (static_cast<u32>(agePvFlag >> 2) & 1) != 0;
-			}
+            u16 key;
+            i16 score;
+            i16 staticEval;
+            Move move;
+            u8 offsetDepth;
+            u8 agePvFlag;
 
-			[[nodiscard]] inline auto flag() const
-			{
-				return static_cast<TtFlag>(agePvFlag & 0x3);
-			}
+            [[nodiscard]] inline bool filled() const {
+                return offsetDepth != 0;
+            }
 
-			inline auto setAgePvFlag(u32 age, bool pv, TtFlag flag)
-			{
-				assert(age < (1 << AgeBits));
-				agePvFlag = (age << 3) | (static_cast<u32>(pv) << 2) | static_cast<u32>(flag);
-			}
-		};
+            [[nodiscard]] inline i32 depth() const {
+                return offsetDepth - kDepthOffset;
+            }
 
-		static_assert(sizeof(Entry) == 10);
+            inline void setDepth(i32 depth) {
+                offsetDepth = depth + kDepthOffset;
+            }
 
-		static constexpr usize ClusterAlignment = 32;
-		static constexpr auto StorageAlignment = std::max(CacheLineSize, ClusterAlignment);
+            [[nodiscard]] inline u32 age() const {
+                return static_cast<u32>(agePvFlag >> 3);
+            }
 
-		struct alignas(32) Cluster
-		{
-			static constexpr usize EntriesPerCluster = 3;
+            [[nodiscard]] inline bool pv() const {
+                return (static_cast<u32>(agePvFlag >> 2) & 1) != 0;
+            }
 
-			std::array<Entry, EntriesPerCluster> entries{};
+            [[nodiscard]] inline TtFlag flag() const {
+                return static_cast<TtFlag>(agePvFlag & 0x3);
+            }
 
-			// round up to nearest power of 2 bytes
-			[[maybe_unused]] std::array<u8,
-				std::bit_ceil(sizeof(Entry) * EntriesPerCluster) - sizeof(Entry) * EntriesPerCluster
-			> padding{};
-		};
+            inline void setAgePvFlag(u32 age, bool pv, TtFlag flag) {
+                assert(age < (1 << kAgeBits));
+                agePvFlag = (age << 3) | (static_cast<u32>(pv) << 2) | static_cast<u32>(flag);
+            }
+        };
 
-		[[nodiscard]] inline auto index(u64 key) const -> u64
-		{
-			// this emits a single mul on both x64 and arm64
-			return static_cast<u64>((static_cast<u128>(key) * static_cast<u128>(m_clusterCount)) >> 64);
-		}
+        static_assert(sizeof(Entry) == 10);
 
-		// Only accessed from UCI thread
-		bool m_pendingInit{};
+        static constexpr usize kSmallPageSize = 4096;
+        static constexpr auto kDefaultStorageAlignment = std::max(kCacheLineSize, kSmallPageSize);
 
-		Cluster *m_clusters{};
-		usize m_clusterCount{};
+        struct alignas(32) Cluster {
+            static constexpr usize kEntriesPerCluster = 3;
+            static constexpr usize kPadding =
+                std::bit_ceil(sizeof(Entry) * kEntriesPerCluster) - sizeof(Entry) * kEntriesPerCluster;
 
-		u32 m_age{};
-	};
-}
+            std::array<Entry, kEntriesPerCluster> entries{};
+            // round up to nearest power of 2 bytes
+            [[maybe_unused]] std::array<u8, kPadding> padding_{};
+        };
+
+        [[nodiscard]] inline u64 index(u64 key) const {
+            // this emits a single mul on both x64 and arm64
+            return static_cast<u64>((static_cast<u128>(key) * static_cast<u128>(m_clusterCount)) >> 64);
+        }
+
+        // Only accessed from UCI thread
+        bool m_pendingInit{};
+
+        Cluster* m_clusters{};
+        usize m_clusterCount{};
+
+        u32 m_age{};
+    };
+} // namespace oranj

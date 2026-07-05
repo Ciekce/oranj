@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,14 +20,18 @@
 
 #include "../types.h"
 
-#include <string>
-#include <limits>
 #include <functional>
+#include <limits>
+#include <optional>
+#include <string_view>
 
-namespace oranj::datagen
-{
-	constexpr auto UnlimitedGames = std::numeric_limits<u32>::max();
-
-	auto run(const std::function<void()> &printUsage, const std::string &format,
-		bool dfrc, const std::string &output, i32 threads, u32 games = UnlimitedGames) -> i32;
+namespace oranj::datagen {
+    i32 run(
+        const std::function<void()>& printUsage,
+        std::string_view format,
+        bool dfrc,
+        std::string_view output,
+        i32 threads,
+        std::optional<std::string_view> tbPath
+    );
 }

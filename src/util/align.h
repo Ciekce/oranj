@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,35 +22,32 @@
 
 #include <cstdlib>
 
-namespace oranj::util
-{
-	template <std::uintptr_t Alignment, typename T = void>
-	constexpr auto isAligned(const T *ptr)
-	{
-		return (reinterpret_cast<std::uintptr_t>(ptr) % Alignment) == 0;
-	}
+namespace oranj::util {
+    template <std::uintptr_t kAlignment, typename T = void>
+    constexpr bool isAligned(const T* ptr) {
+        return (reinterpret_cast<std::uintptr_t>(ptr) % kAlignment) == 0;
+    }
 
-	template <typename T>
-	inline auto alignedAlloc(usize alignment, usize count)
-	{
-		const auto size = count * sizeof(T);
+    template <typename T>
+    inline T* alignedAlloc(usize alignment, usize count) {
+        const auto size = count * sizeof(T);
 
-#ifdef _MSC_VER
-		return static_cast<T *>(_aligned_malloc(size, alignment));
+#ifdef _WIN32
+        return static_cast<T*>(_aligned_malloc(size, alignment));
 #else
-		return static_cast<T *>(std::aligned_alloc(alignment, size));
+        return static_cast<T*>(std::aligned_alloc(alignment, size));
 #endif
-	}
+    }
 
-	inline auto alignedFree(void *ptr)
-	{
-		if (!ptr)
-			return;
+    inline void alignedFree(void* ptr) {
+        if (!ptr) {
+            return;
+        }
 
-#ifdef _MSC_VER
-		_aligned_free(ptr);
+#ifdef _WIN32
+        _aligned_free(ptr);
 #else
-		std::free(ptr);
+        std::free(ptr);
 #endif
-	}
-}
+    }
+} // namespace oranj::util

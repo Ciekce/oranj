@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,39 +19,71 @@
 #include "wdl.h"
 
 #include <array>
+#include <cmath>
 #include <numeric>
+#include <utility>
 
-namespace oranj::wdl
-{
-	auto wdlParams(i32 material) -> std::pair<f64, f64>
-	{
-		static constexpr auto As = std::array {
-			-21.62471742, 57.27533161, -196.12706447, 419.75122408
-		};
+#include "opts.h"
 
-		static constexpr auto Bs = std::array {
-			-41.67494726, 81.27819509, 10.83073229, 48.03832274
-		};
+namespace oranj::wdl {
+    std::pair<f64, f64> wdlParams(i32 material) {
+        static constexpr Score kMaterial58NormalizationK = 396;
 
-		static_assert(Material58NormalizationK == static_cast<i32>(std::reduce(As.begin(), As.end())));
+        static constexpr std::array kAs = {-244.97139595, 687.39969858, -654.38002091, 608.47087786};
+        static constexpr std::array kBs = {68.24072080, -111.17718819, 74.50316570, 71.16566713};
 
-		const auto m = static_cast<f64>(std::clamp(material, 17, 78)) / 58.0;
+        static_assert(kMaterial58NormalizationK == static_cast<i32>(std::reduce(kAs.begin(), kAs.end())));
 
-		return {
-			(((As[0] * m + As[1]) * m + As[2]) * m) + As[3],
-			(((Bs[0] * m + Bs[1]) * m + Bs[2]) * m) + Bs[3]
-		};
-	}
+        const auto m = static_cast<f64>(std::clamp(material, 17, 78)) / 58.0;
 
-	auto wdlModel(Score povScore, i32 material) -> std::pair<i32, i32>
-	{
-		const auto [a, b] = wdlParams(material);
+        return {((kAs[0] * m + kAs[1]) * m + kAs[2]) * m + kAs[3], ((kBs[0] * m + kBs[1]) * m + kBs[2]) * m + kBs[3]};
+    }
 
-		const auto x = static_cast<f64>(povScore);
+    std::pair<i32, i32> wdlModel(Score povScore, i32 material) {
+        const auto [a, b] = wdlParams(material);
 
-		return {
-			static_cast<i32>(std::round(1000.0 / (1.0 + std::exp((a - x) / b)))),
-			static_cast<i32>(std::round(1000.0 / (1.0 + std::exp((a + x) / b))))
-		};
-	}
-}
+        const auto x = static_cast<f64>(povScore);
+
+        return {
+            static_cast<i32>(std::round(1000.0 / (1.0 + std::exp((a - x) / b)))),
+            static_cast<i32>(std::round(1000.0 / (1.0 + std::exp((a + x) / b))))
+        };
+    }
+
+    template <bool kSharpen>
+    Score normalizeScore(Score score, i32 material) {
+        // don't normalise wins/losses, or zeroes that are pointless to normalise
+        if (score == 0 || isDecisive(score)) {
+            return score;
+        }
+
+        const auto [a, b] = wdlParams(material);
+
+        auto normalized = static_cast<f64>(score) / a;
+
+        if (kSharpen && g_opts.evalSharpness != 100) {
+            const auto power = static_cast<f64>(g_opts.evalSharpness) / 100.0;
+
+            auto sharpened = std::pow(std::abs(normalized), power);
+
+            // Damp large evals so they don't enter win range
+            if (g_opts.evalSharpness > 100) {
+                const auto clamp = (std::abs(normalized) * 300.0) / (std::abs(normalized) + 50.0);
+                sharpened = std::min(sharpened, clamp);
+            }
+
+            normalized = std::copysign(sharpened, normalized);
+        }
+
+        return static_cast<Score>(std::round(100.0 * normalized));
+    }
+
+    template Score normalizeScore<false>(Score, i32);
+    template Score normalizeScore<true>(Score, i32);
+
+    Score unnormalizeScore(Score score, i32 material) {
+        const auto [a, b] = wdlParams(material);
+        const auto unnormalized = static_cast<f64>(score) * a / 100.0;
+        return static_cast<Score>(std::round(unnormalized));
+    }
+} // namespace oranj::wdl

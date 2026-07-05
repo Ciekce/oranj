@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,33 +22,29 @@
 
 #include <compare>
 
-namespace oranj::util
-{
-	class Instant
-	{
-	public:
-		[[nodiscard]] auto elapsed() const -> f64;
+namespace oranj::util {
+    class Instant {
+    public:
+        [[nodiscard]] f64 elapsed() const;
 
-		inline auto operator+(f64 time) const
-		{
-			return Instant{m_time + time};
-		}
+        inline Instant operator+(f64 time) const {
+            return Instant{m_time + time};
+        }
 
-		inline auto operator-(f64 time) const
-		{
-			return Instant{m_time - time};
-		}
+        inline Instant operator-(f64 time) const {
+            return Instant{m_time - time};
+        }
 
-		[[nodiscard]] inline auto operator<=>(const Instant &other) const
-		{
-			return m_time <=> other.m_time;
-		}
+        [[nodiscard]] inline std::partial_ordering operator<=>(const Instant& other) const {
+            return m_time <=> other.m_time;
+        }
 
-		[[nodiscard]] static auto now() -> Instant;
+        [[nodiscard]] static Instant now();
 
-	private:
-		explicit Instant(f64 time) : m_time{time} {}
+    private:
+        explicit Instant(f64 time) :
+                m_time{time} {}
 
-		f64 m_time;
-	};
-}
+        f64 m_time;
+    };
+} // namespace oranj::util

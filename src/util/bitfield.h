@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,45 +20,45 @@
 
 #include "../types.h"
 
-#define OJ_ENUM_FLAG_OPERATOR(T,UT,O) \
-[[maybe_unused]] inline constexpr auto operator O(T lhs, T rhs) \
-{ \
-	return static_cast<T>(static_cast<UT>(lhs) O static_cast<UT>(rhs)); \
-} \
-[[maybe_unused]] inline constexpr auto operator O##=(T &lhs, T rhs) \
-{ \
-	return lhs = static_cast<T>(static_cast<UT>(lhs) O static_cast<UT>(rhs)); \
-}
+// clang-format off
+#define OJ_ENUM_FLAG_OPERATOR(T, UT, O) \
+    [[maybe_unused]] inline constexpr T operator O(T lhs, T rhs) { \
+        return static_cast<T>(static_cast<UT>(lhs) O static_cast<UT>(rhs)); \
+    } \
+    [[maybe_unused]] inline constexpr T& operator O##=(T & lhs, T rhs) { \
+        return lhs = static_cast<T>(static_cast<UT>(lhs) O static_cast<UT>(rhs)); \
+    }
+// clang-format on
 
-#define OJ_ENUM_FLAGS(UT,T) \
-enum class T : UT; \
-[[maybe_unused]] inline constexpr auto operator ~(T t) { return static_cast<T>(~static_cast<UT>(t)); } \
-OJ_ENUM_FLAG_OPERATOR(T, UT, |) \
-OJ_ENUM_FLAG_OPERATOR(T, UT, ^) \
-OJ_ENUM_FLAG_OPERATOR(T, UT, &) \
-enum class T : UT
+#define OJ_ENUM_FLAGS(UT, T) \
+    enum class T : UT; \
+    [[maybe_unused]] inline constexpr T operator~(T t) { \
+        return static_cast<T>(~static_cast<UT>(t)); \
+    } \
+    OJ_ENUM_FLAG_OPERATOR(T, UT, |) \
+    OJ_ENUM_FLAG_OPERATOR(T, UT, ^) \
+    OJ_ENUM_FLAG_OPERATOR(T, UT, &) \
+    enum class T : UT
 
-namespace oranj
-{
-	template <typename T>
-	constexpr auto testFlags(T field, T flags)
-	{
-		return (field & flags) != T::None;
-	}
+namespace oranj {
+    template <typename T>
+    [[nodiscard]] constexpr bool testFlags(T field, T flags) {
+        return (field & flags) != T::kNone;
+    }
 
-	template <typename T>
-	constexpr auto setFlags(T field, T flags, bool v)
-	{
-		if (v)
-			field |= flags;
-		else field &= ~flags;
+    template <typename T>
+    [[nodiscard]] constexpr T setFlags(T field, T flags, bool v) {
+        if (v) {
+            field |= flags;
+        } else {
+            field &= ~flags;
+        }
 
-		return field;
-	}
+        return field;
+    }
 
-	template <typename T>
-	constexpr auto flipFlags(T field, T flags)
-	{
-		return field ^ flags;
-	}
-}
+    template <typename T>
+    [[nodiscard]] constexpr T flipFlags(T field, T flags) {
+        return field ^ flags;
+    }
+} // namespace oranj

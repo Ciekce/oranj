@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,45 +20,45 @@
 
 #include <array>
 
-namespace oranj::datagen
-{
-	Viriformat::Viriformat()
-	{
-		m_moves.reserve(256);
-	}
+namespace oranj::datagen {
+    Viriformat::Viriformat() {
+        m_moves.reserve(256);
+    }
 
-	auto Viriformat::start(const Position &initialPosition) -> void
-	{
-		m_initial = marlinformat::PackedBoard::pack(initialPosition, 0);
-		m_moves.clear();
-	}
+    void Viriformat::start(const Position& initialPosition) {
+        m_initial = marlinformat::PackedBoard::pack(initialPosition, 0);
+        m_moves.clear();
+    }
 
-	auto Viriformat::push([[maybe_unused]] bool filtered, Move move, Score score) -> void
-	{
-		static constexpr auto MoveTypes = std::array{
-			static_cast<u16>(0x0000), // normal
-			static_cast<u16>(0xC000), // promo
-		};
+    void Viriformat::push(bool filtered, Move move, Score score) {
+        OJ_UNUSED(filtered);
 
-		u16 viriMove{};
+        static constexpr std::array kMoveTypes = {
+            static_cast<u16>(0x0000), // normal
+            static_cast<u16>(0xC000), // promo
+            static_cast<u16>(0x8000), // castling
+            static_cast<u16>(0x4000)  // ep
+        };
 
-		viriMove |= move.srcIdx();
-		viriMove |= move.dstIdx() << 6;
-		viriMove |= MoveTypes[static_cast<i32>(move.type())];
+        u16 viriMove{};
 
-		m_moves.push_back({viriMove, static_cast<i16>(score)});
-	}
+        viriMove |= move.fromSqIdx();
+        viriMove |= move.toSqIdx() << 6;
+        viriMove |= move.promoIdx() << 12;
+        viriMove |= kMoveTypes[static_cast<i32>(move.type())];
 
-	auto Viriformat::writeAllWithOutcome(std::ostream &stream, Outcome outcome) -> usize
-	{
-		static constexpr std::array<u8, sizeof(ScoredMove)> NullTerminator{};
+        m_moves.push_back({viriMove, static_cast<i16>(score)});
+    }
 
-		m_initial.wdl = outcome;
+    usize Viriformat::writeAllWithOutcome(std::ostream& stream, Outcome outcome) {
+        static constexpr std::array<u8, sizeof(ScoredMove)> kNullTerminator{};
 
-		stream.write(reinterpret_cast<const char *>(&m_initial), sizeof(marlinformat::PackedBoard));
-		stream.write(reinterpret_cast<const char *>(m_moves.data()), sizeof(ScoredMove) * m_moves.size());
-		stream.write(reinterpret_cast<const char *>(NullTerminator.data()), sizeof(ScoredMove));
+        m_initial.wdl = outcome;
 
-		return m_moves.size() + 1;
-	}
-}
+        stream.write(reinterpret_cast<const char*>(&m_initial), sizeof(marlinformat::PackedBoard));
+        stream.write(reinterpret_cast<const char*>(m_moves.data()), sizeof(ScoredMove) * m_moves.size());
+        stream.write(reinterpret_cast<const char*>(kNullTerminator.data()), sizeof(ScoredMove));
+
+        return m_moves.size() + 1;
+    }
+} // namespace oranj::datagen

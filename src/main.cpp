@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,106 +16,115 @@
  * along with oranj. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "uci.h"
+#include <span>
+#include <string_view>
+#include <vector>
+
 #include "bench.h"
+#include "cuckoo.h"
 #include "datagen/datagen.h"
-#include "util/parse.h"
 #include "eval/nnue.h"
 #include "tunable.h"
-#include "cuckoo.h"
-#include "util/ctrlc.h"
+#include "uci/uci.h"
+#include "util/numa/numa.h"
+#include "util/parse.h"
 
 #if OJ_EXTERNAL_TUNE
-#include "util/split.h"
+    #include "util/split.h"
 #endif
 
 using namespace oranj;
 
-auto main(i32 argc, const char *argv[]) -> i32
-{
-	util::signal::init();
+namespace {
+    i32 run(std::span<const std::string_view> args) {
+        if (args.size() > 1) {
+            const auto mode = args[1];
 
-	tunable::init();
-	cuckoo::init();
+            if (mode == "datagen") {
+                const auto printUsage = [&] {
+                    eprintln(
+                        "usage: {} datagen <marlinformat/viriformat/fen> <standard/dfrc> <path> [threads] [syzygy path]",
+                        args[0]
+                    );
+                };
 
-	eval::loadDefaultNetwork();
+                if (args.size() < 5) {
+                    printUsage();
+                    return 1;
+                }
 
-	if (argc > 1)
-	{
-		const std::string mode{argv[1]};
+                bool dfrc = false;
 
-		if (mode == "bench")
-		{
-			search::Searcher searcher{bench::DefaultBenchTtSize};
-			bench::run(searcher);
+                if (args[3] == "dfrc") {
+                    dfrc = true;
+                } else if (args[3] != "standard") {
+                    eprintln("invalid variant '{}'", args[3]);
+                    printUsage();
+                    return 1;
+                }
 
-			return 0;
-		}
-		else if (mode == "datagen")
-		{
-			const auto printUsage = [&]()
-			{
-				std::cerr << "usage: " << argv[0]
-					<< " datagen <marlinformat/viriformat/fen> <standard/dfrc> <path> [threads] [game limit per thread]"
-					<< std::endl;
-			};
+                u32 threads = 1;
+                if (args.size() > 5 && !util::tryParse<u32>(threads, args[5])) {
+                    eprintln("invalid number of threads '{}'", args[5]);
+                    printUsage();
+                    return 1;
+                }
 
-			if (argc < 5)
-			{
-				printUsage();
-				return 1;
-			}
+                std::optional<std::string_view> tbPath{};
+                if (args.size() > 6) {
+                    tbPath = args[6];
+                }
 
-			bool dfrc = false;
-
-			if (std::string{argv[3]} == "dfrc")
-				dfrc = true;
-			else if (std::string{argv[3]} != "standard")
-			{
-				std::cerr << "invalid variant " << argv[3] << std::endl;
-				printUsage();
-				return 1;
-			}
-
-			u32 threads = 1;
-			if (argc > 5 && !util::tryParseU32(threads, argv[5]))
-			{
-				std::cerr << "invalid number of threads " << argv[5] << std::endl;
-				printUsage();
-				return 1;
-			}
-
-			auto games = datagen::UnlimitedGames;
-			if (argc > 6 && !util::tryParseU32(games, argv[6]))
-			{
-				std::cerr << "invalid number of games " << argv[6] << std::endl;
-				printUsage();
-				return 1;
-			}
-
-			return datagen::run(printUsage, argv[2], dfrc, argv[4], static_cast<i32>(threads), games);
-		}
+                return datagen::run(printUsage, args[2], dfrc, args[4], static_cast<i32>(threads), tbPath);
+            }
 #if OJ_EXTERNAL_TUNE
-		else if (mode == "printwf"
-			|| mode == "printctt"
-			|| mode == "printob")
-		{
-			if (argc == 2)
-				return 0;
+            else if (mode == "printwf" || mode == "printctt" || mode == "printob")
+            {
+                if (args.size() == 2) {
+                    return 0;
+                }
 
-			const auto params = split::split(argv[2], ',');
+                std::vector<std::string_view> params{};
+                split::split(params, args[2], ',');
 
-			if (mode == "printwf")
-				uci::printWfTuningParams(params);
-			else if (mode == "printctt")
-				uci::printCttTuningParams(params);
-			else if (mode == "printob")
-				uci::printObTuningParams(params);
+                if (mode == "printwf") {
+                    uci::printWfTuningParams(params);
+                } else if (mode == "printctt") {
+                    uci::printCttTuningParams(params);
+                } else if (mode == "printob") {
+                    uci::printObTuningParams(params);
+                }
 
-			return 0;
-		}
+                return 0;
+            }
 #endif
-	}
+        }
 
-	return uci::run();
+        return uci::run(args.subspan<1>());
+    }
+} // namespace
+
+i32 main(i32 argc, const char* argv[]) {
+    if (!numa::init()) {
+        eprintln("Failed to initialize NUMA support");
+        return 1;
+    }
+
+    tunable::init();
+    cuckoo::init();
+
+    eval::init();
+
+    std::vector<std::string_view> args{};
+    args.reserve(argc);
+
+    for (i32 i = 0; i < argc; ++i) {
+        args.emplace_back(argv[i]);
+    }
+
+    const auto exitCode = run(args);
+
+    eval::shutdown();
+
+    return exitCode;
 }

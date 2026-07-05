@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,25 +23,45 @@
 #include <array>
 
 #include "nnue/activation.h"
+#include "nnue/arch/multilayer.h"
+#include "nnue/arch/singlelayer.h"
+#include "nnue/features/psq.h"
+#include "nnue/features/threats.h"
 #include "nnue/output.h"
-#include "nnue/features.h"
 
-namespace oranj::eval
-{
-	// current arch: (768x16->1536)x2->1x8, mirrored, SquaredClippedReLU
+namespace oranj::eval {
+    // current arch: ((704x16+59808+pp)hm->640)x2->(32x2->64->1)x8
+    // pairwise clipped ReLU -> dual clipped + clipped squared ReLU -> clipped ReLU,
+    // skip connection over L2
 
-	constexpr i32 L1Q = 255;
-	constexpr i32 OutputQ = 64;
+    constexpr u32 kFtQBits = 8;
+    constexpr u32 kL1QBits = 6;
 
-	constexpr bool PairwiseMul = false;
+    constexpr u32 kFtScaleBits = 7;
 
-	constexpr u32 L1Size = 128;
+    constexpr u32 kL1Size = 128;
+    constexpr u32 kL2Size = 1;
+    constexpr u32 kL3Size = 0;
 
-	using L1Activation = nnue::activation::SquaredClippedReLU<i16, i32, L1Q>;
+    using L1Activation = nnue::activation::SquaredClippedReLU;
 
-	constexpr i32 Scale = 400;
+    constexpr bool kDualActivation = false;
+    constexpr bool kSkipL2 = false;
 
-	using InputFeatureSet = nnue::features::SingleBucket;
+    constexpr i32 kScale = 400;
 
-	using OutputBucketing = nnue::output::Single;
-}
+    using PsqFeatureSet = nnue::features::psq::SingleBucket;
+
+    using InputFeatureSet = PsqFeatureSet;
+
+    using OutputBucketing = nnue::output::Single;
+
+    using LayeredArch = nnue::arch::SingleLayer<
+        InputFeatureSet,
+        kL1Size,
+        (1 << kFtQBits) - 1,
+        1 << kL1QBits,
+        L1Activation,
+        OutputBucketing,
+        kScale>;
+} // namespace oranj::eval

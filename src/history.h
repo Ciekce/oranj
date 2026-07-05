@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,202 +20,240 @@
 
 #include "types.h"
 
-#include <cmath>
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
+#include <span>
 #include <utility>
 
-#include "tunable.h"
-#include "move.h"
 #include "bitboard.h"
+#include "move.h"
+#include "tunable.h"
 #include "util/multi_array.h"
 
-namespace oranj
-{
-	using HistoryScore = i16;
+namespace oranj {
+    using HistoryScore = i16;
 
-	struct HistoryEntry
-	{
-		i16 value{};
+    struct HistoryEntry {
+        i16 value{};
 
-		HistoryEntry() = default;
-		HistoryEntry(HistoryScore v) : value{v} {}
+        HistoryEntry() = default;
+        HistoryEntry(HistoryScore v) :
+                value{v} {}
 
-		[[nodiscard]] inline operator HistoryScore() const
-		{
-			return value;
-		}
+        [[nodiscard]] inline operator HistoryScore() const {
+            return value;
+        }
 
-		[[nodiscard]] inline auto operator=(HistoryScore v) -> auto &
-		{
-			value = v;
-			return *this;
-		}
+        inline HistoryEntry& operator=(HistoryScore v) {
+            value = v;
+            return *this;
+        }
 
-		inline auto update(HistoryScore bonus)
-		{
-			value += bonus - value * std::abs(bonus) / tunable::maxHistory();
-		}
-	};
+        inline void update(HistoryScore bonus, i32 max) {
+            value += bonus - value * std::abs(bonus) / max;
+        }
 
-	inline auto historyBonus(i32 depth) -> HistoryScore
-	{
-		return static_cast<HistoryScore>(std::clamp(
-			depth * tunable::historyBonusDepthScale() - tunable::historyBonusOffset(),
-			0, tunable::maxHistoryBonus()
-		));
-	}
+        inline void updateWithBase(HistoryScore bonus, i32 base, i32 max) {
+            value += bonus - base * std::abs(bonus) / max;
+        }
+    };
 
-	inline auto historyPenalty(i32 depth) -> HistoryScore
-	{
-		return static_cast<HistoryScore>(-std::clamp(
-			depth * tunable::historyPenaltyDepthScale() - tunable::historyPenaltyOffset(),
-			0, tunable::maxHistoryPenalty()
-		));
-	}
+    [[nodiscard]] inline HistoryScore historyBonus(i32 depth, i32 depthScale, i32 offset, i32 max) {
+        return static_cast<HistoryScore>(std::clamp(depth * depthScale - offset, 0, max));
+    }
 
-	class ContinuationSubtable
-	{
-	public:
-		ContinuationSubtable() = default;
-		~ContinuationSubtable() = default;
+    class ContinuationSubtable {
+    public:
+        //TODO take two args when c++23 is usable
+        inline HistoryScore operator[](std::pair<Piece, Move> move) const {
+            const auto [piece, mv] = move;
+            return m_data[piece.idx()][mv.toSq().idx()];
+        }
 
-		//TODO take two args when c++23 is usable
-		inline auto operator[](std::pair<Piece, Move> move) const -> HistoryScore
-		{
-			const auto [piece, mv] = move;
-			return m_data[static_cast<i32>(piece)][static_cast<i32>(mv.dst())];
-		}
+        inline HistoryEntry& operator[](std::pair<Piece, Move> move) {
+            const auto [piece, mv] = move;
+            return m_data[piece.idx()][mv.toSq().idx()];
+        }
 
-		inline auto operator[](std::pair<Piece, Move> move) -> auto &
-		{
-			const auto [piece, mv] = move;
-			return m_data[static_cast<i32>(piece)][static_cast<i32>(mv.dst())];
-		}
+    private:
+        // [piece type][to]
+        util::MultiArray<HistoryEntry, Pieces::kCount, Squares::kCount> m_data{};
+    };
 
-	private:
-		// [piece type][to]
-		util::MultiArray<HistoryEntry, 12, 64> m_data{};
-	};
+    [[nodiscard]] inline HistoryScore getConthist(
+        std::span<ContinuationSubtable* const> continuations,
+        i32 ply,
+        Piece moving,
+        Move move,
+        i32 offset
+    ) {
+        if (offset <= ply) {
+            return (*continuations[ply - offset])[{moving, move}];
+        }
 
-	class HistoryTables
-	{
-	public:
-		HistoryTables() = default;
-		~HistoryTables() = default;
+        return 0;
+    }
 
-		inline auto clear()
-		{
-			std::memset(&m_main        , 0, sizeof(m_main        ));
-			std::memset(&m_continuation, 0, sizeof(m_continuation));
-			std::memset(&m_noisy       , 0, sizeof(m_noisy       ));
-		}
+    class HistoryTables {
+    public:
+        inline void clear() {
+            std::memset(&m_butterfly, 0, sizeof(m_butterfly));
+            std::memset(&m_pieceTo, 0, sizeof(m_pieceTo));
+            std::memset(&m_continuation, 0, sizeof(m_continuation));
+            std::memset(&m_noisy, 0, sizeof(m_noisy));
+        }
 
-		[[nodiscard]] inline auto contTable(Piece moving, Square to) const -> const auto &
-		{
-			return m_continuation[static_cast<i32>(moving)][static_cast<i32>(to)];
-		}
+        inline void age() {
+            using namespace tunable;
 
-		[[nodiscard]] inline auto contTable(Piece moving, Square to) -> auto &
-		{
-			return m_continuation[static_cast<i32>(moving)][static_cast<i32>(to)];
-		}
+            for (i32 stm = 0; stm < Colors::kCount; ++stm) {
+                for (i32 from = 0; from < Squares::kCount; ++from) {
+                    for (i32 to = 0; to < Squares::kCount; ++to) {
+                        for (i32 srcThreat = 0; srcThreat < 2; ++srcThreat) {
+                            for (i32 dstThreat = 0; dstThreat < 2; ++dstThreat) {
+                                auto& v = m_butterfly[stm][from][to][srcThreat][dstThreat];
+                                v = v * butterflyAgeingWeight() / 1024;
+                            }
+                        }
+                    }
+                }
+            }
 
-		inline auto updateConthist(std::span<ContinuationSubtable *> continuations,
-			i32 ply, Piece moving, Move move, HistoryScore bonus)
-		{
-			updateConthist(continuations, ply, moving, move, bonus, 1);
-			updateConthist(continuations, ply, moving, move, bonus, 2);
-			updateConthist(continuations, ply, moving, move, bonus, 4);
-		}
+            for (i32 piece = 0; piece < Pieces::kCount; ++piece) {
+                for (i32 to = 0; to < Squares::kCount; ++to) {
+                    for (i32 srcThreat = 0; srcThreat < 2; ++srcThreat) {
+                        for (i32 dstThreat = 0; dstThreat < 2; ++dstThreat) {
+                            auto& v = m_pieceTo[piece][to][srcThreat][dstThreat];
+                            v = v * pieceToAgeingWeight() / 1024;
+                        }
+                    }
+                }
+            }
+        }
 
-		inline auto updateQuietScore(std::span<ContinuationSubtable *> continuations,
-			i32 ply, Bitboard threats, Piece moving, Move move, HistoryScore bonus)
-		{
-			mainEntry(threats, move).update(bonus);
-			updateConthist(continuations, ply, moving, move, bonus);
-		}
+        [[nodiscard]] inline const ContinuationSubtable& contTable(Piece moving, Square to) const {
+            return m_continuation[moving.idx()][to.idx()];
+        }
 
-		inline auto updateNoisyScore(Move move, Piece captured, Bitboard threats, HistoryScore bonus)
-		{
-			noisyEntry(move, captured, threats[move.dst()]).update(bonus);
-		}
+        [[nodiscard]] inline ContinuationSubtable& contTable(Piece moving, Square to) {
+            return m_continuation[moving.idx()][to.idx()];
+        }
 
-		[[nodiscard]] inline auto quietScore(std::span<ContinuationSubtable *const> continuations,
-			i32 ply, Bitboard threats, Piece moving, Move move) const -> i32
-		{
-			i32 score{};
+        inline void updateMainHistory(Bitboard threats, Piece moving, Move move, HistoryScore bonus) {
+            using namespace tunable;
+            butterflyEntry(moving.color(), threats, move)
+                .update(bonus * butterflyUpdateWeight() / 1024, maxButterflyHistory());
+            pieceToEntry(threats, moving, move).update(bonus * pieceToUpdateWeight() / 1024, maxPieceToHistory());
+        }
 
-			score += mainEntry(threats, move);
+        inline void updateConthist(
+            std::span<ContinuationSubtable*> continuations,
+            i32 ply,
+            Bitboard threats,
+            Piece moving,
+            Move move,
+            HistoryScore bonus
+        ) {
+            using namespace tunable;
 
-			score += conthistScore(continuations, ply, moving, move, 1);
-			score += conthistScore(continuations, ply, moving, move, 2);
-			score += conthistScore(continuations, ply, moving, move, 4) / 2;
+            i32 base = 0;
 
-			return score;
-		}
+            base += getButterfly(moving.color(), threats, move) * contBaseButterflyWeight();
+            base += getPieceTo(threats, moving, move) * contBasePieceToWeight();
 
-		[[nodiscard]] inline auto noisyScore(Move move, Piece captured, Bitboard threats) const -> i32
-		{
-			return noisyEntry(move, captured, threats[move.dst()]);
-		}
+            base += getConthist(continuations, ply, moving, move, 1) * contBaseCont1Weight();
+            base += getConthist(continuations, ply, moving, move, 2) * contBaseCont2Weight();
+            base += getConthist(continuations, ply, moving, move, 4) * contBaseCont4Weight();
+            base += getConthist(continuations, ply, moving, move, 6) * contBaseCont6Weight();
 
-	private:
-		// [from][to][from attacked][to attacked]
-		util::MultiArray<HistoryEntry, 64, 64, 2, 2> m_main{};
-		// [prev piece][to][curr piece type][to]
-		util::MultiArray<ContinuationSubtable, 12, 64> m_continuation{};
+            base /= 1024;
 
-		// [from][to][captured][defended]
-		// additional slot for non-capture promos
-		util::MultiArray<HistoryEntry, 64, 64, 13, 2> m_noisy{};
+            updateConthist(continuations, ply, moving, move, base, bonus * cont1UpdateWeight() / 1024, 1);
+            updateConthist(continuations, ply, moving, move, base, bonus * cont2UpdateWeight() / 1024, 2);
+            updateConthist(continuations, ply, moving, move, base, bonus * cont4UpdateWeight() / 1024, 4);
+            updateConthist(continuations, ply, moving, move, base, bonus * cont6UpdateWeight() / 1024, 6);
+        }
 
-		static inline auto updateConthist(std::span<ContinuationSubtable *> continuations,
-			i32 ply, Piece moving, Move move, HistoryScore bonus, i32 offset) -> void
-		{
-			if (offset <= ply)
-				conthistEntry(continuations, ply, offset)[{moving, move}].update(bonus);
-		}
+        inline void updateQuietScore(
+            std::span<ContinuationSubtable*> continuations,
+            i32 ply,
+            Bitboard threats,
+            Piece moving,
+            Move move,
+            HistoryScore bonus
+        ) {
+            updateMainHistory(threats, moving, move, bonus);
+            updateConthist(continuations, ply, threats, moving, move, bonus);
+        }
 
-		static inline auto conthistScore(std::span<ContinuationSubtable *const > continuations,
-			i32 ply, Piece moving, Move move, i32 offset) -> HistoryScore
-		{
-			if (offset <= ply)
-				return conthistEntry(continuations, ply, offset)[{moving, move}];
+        inline void updateNoisyScore(Move move, Piece captured, Bitboard threats, HistoryScore bonus) {
+            noisyEntry(move, captured, threats.hasSq(move.toSq())).update(bonus, tunable::maxNoisyHistory());
+        }
 
-			return 0;
-		}
+        [[nodiscard]] inline i32 getButterfly(Color stm, Bitboard threats, Move move) const {
+            return butterflyEntry(stm, threats, move);
+        }
 
-		[[nodiscard]] inline auto mainEntry(Bitboard threats, Move move) const -> const HistoryEntry &
-		{
-			return m_main[move.srcIdx()][move.dstIdx()][threats[move.src()]][threats[move.dst()]];
-		}
+        [[nodiscard]] inline i32 getPieceTo(Bitboard threats, Piece moving, Move move) const {
+            return pieceToEntry(threats, moving, move);
+        }
 
-		[[nodiscard]] inline auto mainEntry(Bitboard threats, Move move) -> HistoryEntry &
-		{
-			return m_main[move.srcIdx()][move.dstIdx()][threats[move.src()]][threats[move.dst()]];
-		}
+        [[nodiscard]] inline i32 getNoisy(Move move, Piece captured, Bitboard threats) const {
+            return noisyEntry(move, captured, threats.hasSq(move.toSq()));
+        }
 
-		[[nodiscard]] static inline auto conthistEntry(std::span<ContinuationSubtable *const> continuations,
-			i32 ply, i32 offset) -> const ContinuationSubtable &
-		{
-			return *continuations[ply - offset];
-		}
+    private:
+        // [stm][from][to][from attacked][to attacked]
+        util::MultiArray<HistoryEntry, Colors::kCount, Squares::kCount, Squares::kCount, 2, 2> m_butterfly{};
+        // [piece][to]
+        util::MultiArray<HistoryEntry, Pieces::kCount, Squares::kCount, 2, 2> m_pieceTo{};
+        // [prev piece][to][curr piece type][to]
+        util::MultiArray<ContinuationSubtable, Pieces::kCount, Squares::kCount> m_continuation{};
 
-		[[nodiscard]] static inline auto conthistEntry(
-			std::span<ContinuationSubtable *> continuations, i32 ply, i32 offset) -> ContinuationSubtable &
-		{
-			return *continuations[ply - offset];
-		}
+        // [from][to][captured][defended]
+        // additional slot for non-capture queen promos
+        util::MultiArray<HistoryEntry, Squares::kCount, Squares::kCount, Pieces::kCount + 1, 2> m_noisy{};
 
-		[[nodiscard]] inline auto noisyEntry(Move move, Piece captured, bool defended) const -> const HistoryEntry &
-		{
-			return m_noisy[move.srcIdx()][move.dstIdx()][static_cast<i32>(captured)][defended];
-		}
+        static inline void updateConthist(
+            std::span<ContinuationSubtable*> continuations,
+            i32 ply,
+            Piece moving,
+            Move move,
+            i32 base,
+            HistoryScore bonus,
+            i32 offset
+        ) {
+            if (offset <= ply) {
+                (*continuations[ply - offset])[{moving, move}].updateWithBase(bonus, base, tunable::maxConthist());
+            }
+        }
 
-		[[nodiscard]] inline auto noisyEntry(Move move, Piece captured, bool defended) -> HistoryEntry &
-		{
-			return m_noisy[move.srcIdx()][move.dstIdx()][static_cast<i32>(captured)][defended];
-		}
-	};
-}
+        [[nodiscard]] inline const HistoryEntry& butterflyEntry(Color stm, Bitboard threats, Move move) const {
+            return m_butterfly[stm.idx()][move.fromSqIdx()][move.toSqIdx()][threats.hasSq(move.fromSq())]
+                              [threats.hasSq(move.toSq())];
+        }
+
+        [[nodiscard]] inline HistoryEntry& butterflyEntry(Color stm, Bitboard threats, Move move) {
+            return m_butterfly[stm.idx()][move.fromSqIdx()][move.toSqIdx()][threats.hasSq(move.fromSq())]
+                              [threats.hasSq(move.toSq())];
+        }
+
+        [[nodiscard]] inline const HistoryEntry& pieceToEntry(Bitboard threats, Piece moving, Move move) const {
+            return m_pieceTo[moving.idx()][move.toSqIdx()][threats.hasSq(move.fromSq())][threats.hasSq(move.toSq())];
+        }
+
+        [[nodiscard]] inline HistoryEntry& pieceToEntry(Bitboard threats, Piece moving, Move move) {
+            return m_pieceTo[moving.idx()][move.toSqIdx()][threats.hasSq(move.fromSq())][threats.hasSq(move.toSq())];
+        }
+
+        [[nodiscard]] inline const HistoryEntry& noisyEntry(Move move, Piece captured, bool defended) const {
+            return m_noisy[move.fromSqIdx()][move.toSqIdx()][captured.idx()][defended];
+        }
+
+        [[nodiscard]] inline HistoryEntry& noisyEntry(Move move, Piece captured, bool defended) {
+            return m_noisy[move.fromSqIdx()][move.toSqIdx()][captured.idx()][defended];
+        }
+    };
+} // namespace oranj

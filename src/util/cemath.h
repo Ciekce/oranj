@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,23 +22,24 @@
 
 #include <concepts>
 
-namespace oranj::util
-{
-	template <typename T>
-	constexpr auto abs(T v)
-	{
-		return v < T{0} ? -v : v;
-	}
+namespace oranj::util {
+    template <typename T>
+    [[nodiscard]] constexpr T abs(T v) {
+        return v < T{0} ? -v : v;
+    }
 
-	template <std::integral auto One>
-	constexpr auto ilerp(decltype(One) a, decltype(One) b, decltype(One) t) -> decltype(One)
-	{
-		return (a * (One - t) + b * t) / One;
-	}
+    template <std::integral auto kOne>
+    [[nodiscard]] constexpr auto ilerp(auto a, auto b, auto t) {
+        return (a * (kOne - t) + b * t) / kOne;
+    }
 
-	template <std::integral T>
-	constexpr auto ceilDiv(T a, T b)
-	{
-		return (a + b - 1) / b;
-	}
-}
+    template <std::integral T>
+    [[nodiscard]] constexpr T ceilDiv(T a, T b) {
+        return (a + b - 1) / b;
+    }
+
+    template <std::unsigned_integral auto kBlock>
+    [[nodiscard]] inline decltype(kBlock) pad(decltype(kBlock) v) {
+        return ceilDiv(v, kBlock) * kBlock;
+    }
+} // namespace oranj::util

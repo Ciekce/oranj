@@ -1,0 +1,1715 @@
+/*
+ * oranj, a UCI shatranj engine
+ * Copyright (C) 2026 Ciekce
+ *
+ * oranj is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * oranj is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with oranj. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#include "position.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cstdlib>
+#include <iterator>
+#include <utility>
+#include <vector>
+
+#include "attacks/attacks.h"
+#include "cuckoo.h"
+#include "eval/nnue_state.h"
+#include "movegen.h"
+#include "opts.h"
+#include "rays.h"
+#include "util/parse.h"
+#include "util/split.h"
+
+namespace oranj {
+    namespace {
+        std::array<PieceType, 8> scharnaglToBackrank(u32 n) {
+            // https://en.wikipedia.org/wiki/Fischer_random_chess_numbering_scheme#Direct_derivation
+
+            // these are stored with the second knight moved left by an empty square,
+            // because the first knight fills a square before the second knight is placed
+            static constexpr std::array kN5n = {
+                std::pair{0, 0},
+                std::pair{0, 1},
+                std::pair{0, 2},
+                std::pair{0, 3},
+                std::pair{1, 1},
+                std::pair{1, 2},
+                std::pair{1, 3},
+                std::pair{2, 2},
+                std::pair{2, 3},
+                std::pair{3, 3},
+            };
+
+            assert(n < 960);
+
+            std::array<PieceType, 8> dst{};
+            // no need to fill with empty pieces, because pawns are impossible
+
+            const auto placeInNthFree = [&dst](u32 n, PieceType pt) {
+                for (i32 free = 0, i = 0; i < 8; ++i) {
+                    if (dst[i] == PieceTypes::kPawn && free++ == n) {
+                        dst[i] = pt;
+                        break;
+                    }
+                }
+            };
+
+            const auto placeInFirstFree = [&dst](PieceType pt) {
+                for (i32 i = 0; i < 8; ++i) {
+                    if (dst[i] == PieceTypes::kPawn) {
+                        dst[i] = pt;
+                        break;
+                    }
+                }
+            };
+
+            const auto n2 = n / 4;
+            const auto b1 = n % 4;
+
+            const auto n3 = n2 / 4;
+            const auto b2 = n2 % 4;
+
+            const auto n4 = n3 / 6;
+            const auto q = n3 % 6;
+
+            dst[b1 * 2 + 1] = PieceTypes::kBishop;
+            dst[b2 * 2] = PieceTypes::kBishop;
+
+            placeInNthFree(q, PieceTypes::kQueen);
+
+            const auto [knight1, knight2] = kN5n[n4];
+
+            placeInNthFree(knight1, PieceTypes::kKnight);
+            placeInNthFree(knight2, PieceTypes::kKnight);
+
+            placeInFirstFree(PieceTypes::kRook);
+            placeInFirstFree(PieceTypes::kKing);
+            placeInFirstFree(PieceTypes::kRook);
+
+            return dst;
+        }
+    } // namespace
+
+    using NnueObserver = eval::BoardObserver;
+
+    template <typename Observer>
+    Position Position::applyMove(Move move, Observer observer) const {
+        auto newPos = *this;
+
+        newPos.m_stm = m_stm.flip();
+        newPos.m_keys.flipStm();
+
+        if (newPos.m_enPassant != Squares::kNone) {
+            newPos.m_keys.flipEp(newPos.m_enPassant);
+            newPos.m_enPassant = Squares::kNone;
+        }
+
+        const auto stm = newPos.nstm();
+        const auto nstm = stm.flip();
+
+        if (stm == Colors::kBlack) {
+            ++newPos.m_fullmove;
+        }
+
+        if (!move) {
+            newPos.calcCheckersAndPins();
+            newPos.calcThreats();
+
+            newPos.calcCheckZones();
+
+            return newPos;
+        }
+
+        const auto moveType = move.type();
+
+        const auto moveSrc = move.fromSq();
+        const auto moveDst = move.toSq();
+
+        const auto moving = pieceOn(moveSrc);
+        const auto movingType = moving.type();
+
+        auto captured = Pieces::kNone;
+
+        switch (moveType) {
+            case MoveType::kStandard:
+                captured = newPos.movePiece<true, Observer>(moving, moveSrc, moveDst, observer);
+                break;
+            case MoveType::kPromotion:
+                captured = newPos.promotePawn<true, Observer>(moving, moveSrc, moveDst, move.promo(), observer);
+                break;
+            case MoveType::kCastling:
+                newPos.castle<true, Observer>(moving, moveSrc, moveDst, observer);
+                break;
+            case MoveType::kEnPassant:
+                captured = newPos.enPassant<true, Observer>(moving, moveSrc, moveDst, observer);
+                break;
+        }
+
+        assert(captured.typeOrNone() != PieceTypes::kKing);
+
+        observer.finalize(*this, newPos);
+
+        if (movingType == PieceTypes::kRook) {
+            newPos.m_castlingRooks.color(stm).unset(moveSrc);
+        } else if (movingType == PieceTypes::kKing) {
+            newPos.m_castlingRooks.color(stm).clear();
+        } else if (movingType == PieceTypes::kPawn && std::abs(move.fromSqRank() - move.toSqRank()) == 2) {
+            newPos.m_enPassant = move.toSq().flipRankParity();
+            newPos.m_keys.flipEp(newPos.m_enPassant);
+        }
+
+        if (captured == Pieces::kNone && moving.type() != PieceTypes::kPawn) {
+            ++newPos.m_halfmove;
+        } else {
+            newPos.m_halfmove = 0;
+        }
+
+        if (captured != Pieces::kNone && captured.type() == PieceTypes::kRook) {
+            newPos.m_castlingRooks.color(nstm).unset(moveDst);
+        }
+
+        if (newPos.m_castlingRooks != m_castlingRooks) {
+            newPos.m_keys.switchCastling(m_castlingRooks, newPos.m_castlingRooks);
+        }
+
+        newPos.calcCheckersAndPins();
+        newPos.calcThreats();
+
+        newPos.calcCheckZones();
+
+        newPos.filterEp(nstm);
+
+        return newPos;
+    }
+
+    template Position Position::applyMove<NullObserver>(Move, NullObserver) const;
+    template Position Position::applyMove<NnueObserver>(Move, NnueObserver) const;
+
+    bool Position::isLegal(Move move) const {
+        assert(move != kNullMove);
+        assert(move.type() == MoveType::kPromotion || move.promoIdx() == 0);
+
+        const auto us = stm();
+
+        const auto kingSq = m_kings.color(us);
+
+        const auto src = move.fromSq();
+        const auto dst = move.toSq();
+        const auto srcPiece = pieceOn(src);
+        const auto dstPiece = pieceOn(dst);
+
+        const auto type = move.type();
+
+        if (srcPiece == Pieces::kNone || srcPiece.color() != us) {
+            return false;
+        }
+
+        if (m_checkers && srcPiece != PieceTypes::kKing.withColor(us)) {
+            // multiple checks can only be evaded with a king move
+            if (m_checkers.multiple()) {
+                return false;
+            }
+
+            // one checker may be evaded, blocked, or captured
+            const auto checker = m_checkers.lowestSquare();
+            if (!(rayBetween(kingSq, checker) | Bitboard::fromSquare(checker)).hasSq(dst)
+                && type != MoveType::kEnPassant)
+            {
+                return false;
+            }
+        }
+
+        // pinned pieces can only move along their pin ray
+        if (pinned(us).hasSq(src) && !rayIntersecting(src, dst).hasSq(kingSq)) {
+            return false;
+        }
+
+        // we're capturing something
+        if (dstPiece != Pieces::kNone
+            // we're capturing our own piece
+            && ((dstPiece.color() == us
+                 //  and either not castling
+                 && (type != MoveType::kCastling
+                     // or trying to castle with a non-rook
+                     || dstPiece != PieceTypes::kRook.withColor(us)))
+                // or trying to capture a king
+                || dstPiece.type() == PieceTypes::kKing))
+        {
+            return false;
+        }
+
+        const auto srcPieceType = srcPiece.type();
+        const auto them = us.flip();
+        const auto occ = this->occ();
+
+        if (type == MoveType::kCastling) {
+            if (srcPieceType != PieceTypes::kKing || isCheck()) {
+                return false;
+            }
+
+            const auto homeRank = relativeRank(us, 0);
+
+            // wrong rank
+            if (move.fromSqRank() != homeRank || move.toSqRank() != homeRank) {
+                return false;
+            }
+
+            Square kingDst, rookDst;
+
+            if (src.file() < dst.file()) {
+                // no castling rights
+                if (dst != m_castlingRooks.color(us).kingside) {
+                    return false;
+                }
+
+                kingDst = src.withFile(kFileG);
+                rookDst = src.withFile(kFileF);
+            } else {
+                // no castling rights
+                if (dst != m_castlingRooks.color(us).queenside) {
+                    return false;
+                }
+
+                kingDst = src.withFile(kFileC);
+                rookDst = src.withFile(kFileD);
+            }
+
+            // same checks as for movegen
+            if (g_opts.chess960) {
+                const auto toKingDst = rayBetween(src, kingDst);
+                const auto toRook = rayBetween(src, dst);
+
+                const auto castleOcc = occ ^ src.bit() ^ dst.bit();
+                const auto clearMask = toKingDst | toRook | kingDst.bit() | rookDst.bit();
+                const auto checkMask = toKingDst | kingDst.bit();
+
+                return (castleOcc & clearMask).empty() && (m_threats & checkMask).empty() && !pinned(us).hasSq(dst);
+            } else {
+                if (dst == m_castlingRooks.black().kingside) {
+                    return (occ & U64(0x6000000000000000)).empty() && (m_threats & U64(0x7000000000000000)).empty();
+                } else if (dst == m_castlingRooks.black().queenside) {
+                    return (occ & U64(0x0E00000000000000)).empty() && (m_threats & U64(0x1C00000000000000)).empty();
+                } else if (dst == m_castlingRooks.white().kingside) {
+                    return (occ & U64(0x0000000000000060)).empty() && (m_threats & U64(0x0000000000000070)).empty();
+                } else {
+                    return (occ & U64(0x000000000000000E)).empty() && (m_threats & U64(0x000000000000001C)).empty();
+                }
+            }
+        }
+
+        if (srcPieceType == PieceTypes::kPawn) {
+            if (type == MoveType::kEnPassant) {
+                if (dst != m_enPassant || !attacks::getPawnAttacks(m_enPassant, them).hasSq(src)) {
+                    return false;
+                }
+
+                const auto captureSquare = dst.flipRankParity();
+                const auto postEpOcc =
+                    occ ^ Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst) ^ Bitboard::fromSquare(captureSquare);
+
+                const auto theirQueens = m_bbs.queens(them);
+
+                return (attacks::getBishopAttacks(kingSq, postEpOcc) & (theirQueens | m_bbs.bishops(them))).empty()
+                    && (attacks::getRookAttacks(kingSq, postEpOcc) & (theirQueens | m_bbs.rooks(them))).empty();
+            }
+
+            const auto srcRank = move.fromSqRank();
+            const auto dstRank = move.toSqRank();
+
+            // backwards move
+            if ((us == Colors::kBlack && dstRank >= srcRank) || (us == Colors::kWhite && dstRank <= srcRank)) {
+                return false;
+            }
+
+            const auto promoRank = relativeRank(us, 7);
+
+            // non-promotion move to back rank, or promotion move to any other rank
+            if ((type == MoveType::kPromotion) != (dstRank == promoRank)) {
+                return false;
+            }
+
+            // sideways move
+            if (move.fromSqFile() != move.toSqFile()) {
+                // not valid attack
+                if (!(attacks::getPawnAttacks(src, us) & bb(them)).hasSq(dst)) {
+                    return false;
+                }
+            } else if (dstPiece != Pieces::kNone) {
+                // forward move onto a piece
+                return false;
+            }
+
+            const auto delta = std::abs(dstRank - srcRank);
+            const auto maxDelta = 1 + (srcRank == relativeRank(us, kRank2));
+
+            if (delta > maxDelta) {
+                return false;
+            }
+
+            if (delta == 2 && occ.hasSq(dst.flipRankParity())) {
+                return false;
+            }
+        } else {
+            if (type == MoveType::kPromotion || type == MoveType::kEnPassant) {
+                return false;
+            }
+
+            Bitboard attacks{};
+
+            switch (srcPieceType.raw()) {
+                case PieceTypes::kKnight.raw():
+                    attacks = attacks::getKnightAttacks(src);
+                    break;
+                case PieceTypes::kBishop.raw():
+                    attacks = attacks::getBishopAttacks(src, occ);
+                    break;
+                case PieceTypes::kRook.raw():
+                    attacks = attacks::getRookAttacks(src, occ);
+                    break;
+                case PieceTypes::kQueen.raw():
+                    attacks = attacks::getQueenAttacks(src, occ);
+                    break;
+                case PieceTypes::kKing.raw():
+                    attacks = attacks::getKingAttacks(src) & ~m_threats;
+                    break;
+                default:
+                    __builtin_unreachable();
+            }
+
+            if (!attacks.hasSq(dst)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    u64 Position::roughKeyAfter(Move move) const {
+        assert(move);
+
+        const auto moving = pieceOn(move.fromSq());
+        assert(moving != Pieces::kNone);
+
+        const auto captured = pieceOn(move.toSq());
+
+        auto key = m_keys.all;
+
+        key ^= keys::pieceSquare(moving, move.fromSq());
+        key ^= keys::pieceSquare(moving, move.toSq());
+
+        if (captured != Pieces::kNone) {
+            key ^= keys::pieceSquare(captured, move.toSq());
+        }
+
+        key ^= keys::color();
+
+        return key;
+    }
+
+    Bitboard Position::allAttackersTo(Square sq, Bitboard occ) const {
+        assert(sq != Squares::kNone);
+
+        const auto& bbs = this->bbs();
+
+        Bitboard attackers{};
+
+        const auto queens = bbs.queens();
+
+        const auto rooks = queens | bbs.rooks();
+        attackers |= rooks & attacks::getRookAttacks(sq, occ);
+
+        const auto bishops = queens | bbs.bishops();
+        attackers |= bishops & attacks::getBishopAttacks(sq, occ);
+
+        attackers |= bbs.blackPawns() & attacks::getPawnAttacks(sq, Colors::kWhite);
+        attackers |= bbs.whitePawns() & attacks::getPawnAttacks(sq, Colors::kBlack);
+
+        const auto knights = bbs.knights();
+        attackers |= knights & attacks::getKnightAttacks(sq);
+
+        const auto kings = bbs.kings();
+        attackers |= kings & attacks::getKingAttacks(sq);
+
+        return attackers;
+    }
+
+    Bitboard Position::nonSliderAttackersTo(Square sq, Color attacker) const {
+        assert(sq != Squares::kNone);
+
+        const auto& bbs = this->bbs();
+
+        Bitboard attackers{};
+
+        const auto pawns = bbs.pawns(attacker);
+        attackers |= pawns & attacks::getPawnAttacks(sq, attacker.flip());
+
+        const auto knights = bbs.knights(attacker);
+        attackers |= knights & attacks::getKnightAttacks(sq);
+
+        const auto kings = bbs.kings(attacker);
+        attackers |= kings & attacks::getKingAttacks(sq);
+
+        return attackers;
+    }
+
+    Bitboard Position::attackersTo(Square sq, Color attacker) const {
+        assert(sq != Squares::kNone);
+
+        auto attackers = nonSliderAttackersTo(sq, attacker);
+
+        const auto& bbs = this->bbs();
+
+        const auto occ = this->occ();
+        const auto queens = bbs.queens(attacker);
+
+        const auto rooks = queens | bbs.rooks(attacker);
+        attackers |= rooks & attacks::getRookAttacks(sq, occ);
+
+        const auto bishops = queens | bbs.bishops(attacker);
+        attackers |= bishops & attacks::getBishopAttacks(sq, occ);
+
+        return attackers;
+    }
+
+    template bool Position::isAttacked<false>(Color toMove, Square sq, Color attacker) const;
+    template bool Position::isAttacked<true>(Color toMove, Square sq, Color attacker) const;
+
+    template <bool kThreatShortcut>
+    bool Position::isAttacked(Color toMove, Square sq, Color attacker) const {
+        assert(toMove != Colors::kNone);
+        assert(sq != Squares::kNone);
+        assert(attacker != Colors::kNone);
+
+        if constexpr (kThreatShortcut) {
+            if (attacker != toMove) {
+                return m_threats.hasSq(sq);
+            }
+        }
+
+        const auto occ = this->occ();
+
+        if (const auto knights = m_bbs.knights(attacker); !(knights & attacks::getKnightAttacks(sq)).empty()) {
+            return true;
+        }
+
+        if (const auto pawns = m_bbs.pawns(attacker); !(pawns & attacks::getPawnAttacks(sq, attacker.flip())).empty()) {
+            return true;
+        }
+
+        if (const auto kings = m_bbs.kings(attacker); !(kings & attacks::getKingAttacks(sq)).empty()) {
+            return true;
+        }
+
+        const auto queens = m_bbs.queens(attacker);
+
+        if (const auto bishops = queens | m_bbs.bishops(attacker);
+            !(bishops & attacks::getBishopAttacks(sq, occ)).empty())
+        {
+            return true;
+        }
+
+        if (const auto rooks = queens | m_bbs.rooks(attacker); !(rooks & attacks::getRookAttacks(sq, occ)).empty()) {
+            return true;
+        }
+
+        return false;
+    }
+
+    bool Position::anyAttacked(Bitboard squares, Color attacker) const {
+        assert(attacker != Colors::kNone);
+
+        if (attacker == nstm()) {
+            return !(squares & m_threats).empty();
+        }
+
+        for (const auto sq : squares) {
+            if (isAttacked(sq, attacker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // see comment in cuckoo.cpp
+    bool Position::hasUpcomingRepetition(i32 ply, std::span<const u64> keys) const {
+        const auto end = std::min<i32>(m_halfmove, static_cast<i32>(keys.size()));
+
+        if (end < 3) {
+            return false;
+        }
+
+        const auto prevKey = [&](i32 d) { return keys[keys.size() - d]; };
+
+        const auto occ = this->occ();
+        const auto originalKey = m_keys.all;
+
+        auto other = originalKey ^ prevKey(1);
+
+        for (i32 d = 3; d <= end; d += 2) {
+            const auto currKey = prevKey(d);
+
+            other ^= currKey ^ prevKey(d - 1);
+            if (other != 0) {
+                continue;
+            }
+
+            const auto diff = originalKey ^ currKey;
+
+            u32 slot = cuckoo::h1(diff);
+
+            if (diff != cuckoo::keys[slot]) {
+                slot = cuckoo::h2(diff);
+            }
+
+            if (diff != cuckoo::keys[slot]) {
+                continue;
+            }
+
+            const auto move = cuckoo::moves[slot];
+
+            if ((occ & rayBetween(move.fromSq(), move.toSq())).empty()) {
+                // repetition is after root, done
+                if (ply > d) {
+                    return true;
+                }
+
+                // otherwise, require a threefold
+                for (i32 i = d + 2; i <= end; ++i) {
+                    if (currKey == prevKey(i)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool Position::isDrawnByRepetition(i32 ply, std::span<const u64> keys) const {
+        const auto currKey = m_keys.all;
+        const auto limit = std::max(0, static_cast<i32>(keys.size()) - m_halfmove - 2);
+
+        ply -= 4;
+
+        i32 repetitions = 0;
+
+        for (auto i = static_cast<i32>(keys.size()) - 4; i >= limit; i -= 2, ply -= 2) {
+            // require a threefold repetition before root
+            if (keys[i] == currKey && ++repetitions == 1 + (ply < 0)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool Position::isDrawn(i32 ply, std::span<const u64> keys) const {
+        if (m_halfmove >= 100) {
+            if (!isCheck()) {
+                return true;
+            }
+
+            //TODO there's a speedup possible here, but
+            // it requires a lot of movegen refactoring
+            ScoredMoveList moves{};
+            generateAll(moves, *this);
+
+            return !moves.empty();
+        }
+
+        if (isDrawnByRepetition(ply, keys)) {
+            return true;
+        }
+
+        const auto& bbs = this->bbs();
+
+        if (!bbs.pawns().empty() || !bbs.majors().empty()) {
+            return false;
+        }
+
+        // KK
+        if (bbs.nonPk().empty()) {
+            return true;
+        }
+
+        // KNK or KBK
+        if ((bbs.blackNonPk().empty() && bbs.whiteNonPk() == bbs.whiteMinors() && !bbs.whiteMinors().multiple())
+            || (bbs.whiteNonPk().empty() && bbs.blackNonPk() == bbs.blackMinors() && !bbs.blackMinors().multiple()))
+        {
+            return true;
+        }
+
+        // KBKB OCB
+        if ((bbs.blackNonPk() == bbs.blackBishops() && bbs.whiteNonPk() == bbs.whiteBishops())
+            && !bbs.blackBishops().multiple() && !bbs.whiteBishops().multiple()
+            && (bbs.blackBishops() & boards::kLightSquares).empty()
+                   != (bbs.whiteBishops() & boards::kLightSquares).empty())
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    Piece Position::captureTarget(Move move) const {
+        assert(move != kNullMove);
+
+        const auto type = move.type();
+
+        if (type == MoveType::kCastling) {
+            return Pieces::kNone;
+        } else if (type == MoveType::kEnPassant) {
+            return pieceOn(move.fromSq()).flipColor();
+        } else {
+            return pieceOn(move.toSq());
+        }
+    }
+
+    bool Position::isNoisy(Move move) const {
+        assert(move != kNullMove);
+        const auto type = move.type();
+        return type != MoveType::kCastling
+            && (type == MoveType::kEnPassant || move.promo() == PieceTypes::kQueen
+                || pieceOn(move.toSq()) != Pieces::kNone);
+    }
+
+    bool Position::givesDirectCheck(Move move) const {
+        assert(move != kNullMove);
+
+        const auto movingPt = move.type() == MoveType::kPromotion ? move.promo() : pieceOn(move.fromSq()).type();
+
+        if (movingPt == PieceTypes::kKing) {
+            return false;
+        }
+
+        const auto checkZone = [&] {
+            if (movingPt == PieceTypes::kQueen) {
+                return m_checkZones[PieceTypes::kBishop.idx()] | m_checkZones[PieceTypes::kRook.idx()];
+            }
+            return m_checkZones[movingPt.idx()];
+        }();
+
+        return checkZone.hasSq(move.toSq());
+    }
+
+    std::string Position::toFen() const {
+        std::string fen{};
+        auto itr = std::back_inserter(fen);
+
+        for (i32 rank = 7; rank >= 0; --rank) {
+            for (i32 file = 0; file < 8; ++file) {
+                const auto sq = Square::fromFileRank(file, rank);
+                if (pieceOn(sq) == Pieces::kNone) {
+                    u32 emptySquares = 1;
+                    for (; file < 7 && pieceOn(Square::fromFileRank(file + 1, rank)) == Pieces::kNone;
+                         ++file, ++emptySquares)
+                    {}
+                    fmt::format_to(itr, "{}", static_cast<char>('0' + emptySquares));
+                } else {
+                    fmt::format_to(itr, "{}", pieceOn(sq));
+                }
+            }
+
+            if (rank > 0) {
+                fmt::format_to(itr, "/");
+            }
+        }
+
+        fmt::format_to(itr, "{}", stm() == Colors::kWhite ? " w " : " b ");
+
+        if (m_castlingRooks == CastlingRooks{}) {
+            fmt::format_to(itr, "-");
+        } else if (g_opts.chess960) {
+            if (m_castlingRooks.white().kingside != Squares::kNone) {
+                fmt::format_to(itr, "{}", static_cast<char>('A' + m_castlingRooks.white().kingside.file()));
+            }
+
+            if (m_castlingRooks.white().queenside != Squares::kNone) {
+                fmt::format_to(itr, "{}", static_cast<char>('A' + m_castlingRooks.white().queenside.file()));
+            }
+
+            if (m_castlingRooks.black().kingside != Squares::kNone) {
+                fmt::format_to(itr, "{}", static_cast<char>('a' + m_castlingRooks.black().kingside.file()));
+            }
+
+            if (m_castlingRooks.black().queenside != Squares::kNone) {
+                fmt::format_to(itr, "{}", static_cast<char>('a' + m_castlingRooks.black().queenside.file()));
+            }
+        } else {
+            if (m_castlingRooks.white().kingside != Squares::kNone) {
+                fmt::format_to(itr, "K");
+            }
+
+            if (m_castlingRooks.white().queenside != Squares::kNone) {
+                fmt::format_to(itr, "Q");
+            }
+
+            if (m_castlingRooks.black().kingside != Squares::kNone) {
+                fmt::format_to(itr, "k");
+            }
+
+            if (m_castlingRooks.black().queenside != Squares::kNone) {
+                fmt::format_to(itr, "q");
+            }
+        }
+
+        if (m_enPassant != Squares::kNone) {
+            fmt::format_to(itr, " {}", m_enPassant);
+        } else {
+            fmt::format_to(itr, " -");
+        }
+
+        fmt::format_to(itr, " {} {}", m_halfmove, m_fullmove);
+
+        return fen;
+    }
+
+    void Position::regen() {
+        m_mailbox.fill(Pieces::kNone);
+        m_keys.clear();
+
+        for (u32 pieceIdx = 0; pieceIdx < Pieces::kCount; ++pieceIdx) {
+            const auto piece = Piece::fromRaw(pieceIdx);
+            for (const auto sq : m_bbs.bb(piece)) {
+                assert(mailboxSlot(sq) == Pieces::kNone);
+
+                mailboxSlot(sq) = piece;
+
+                if (piece.type() == PieceTypes::kKing) {
+                    m_kings.color(piece.color()) = sq;
+                }
+
+                m_keys.flipPiece(piece, sq);
+            }
+        }
+
+        m_keys.flipCastling(m_castlingRooks);
+        m_keys.flipEp(m_enPassant);
+
+        if (stm() == Colors::kBlack) {
+            m_keys.flipStm();
+        }
+
+        calcCheckersAndPins();
+        calcThreats();
+
+        calcCheckZones();
+
+        filterEp(stm());
+    }
+
+    Move Position::moveFromUci(std::string_view move) const {
+        if (move.length() < 4 || move.length() > 5) {
+            return kNullMove;
+        }
+
+        const auto src = Square::fromStr(move.substr(0, 2));
+        const auto dst = Square::fromStr(move.substr(2, 2));
+
+        if (!src || !dst) {
+            return kNullMove;
+        }
+
+        if (move.length() == 5) {
+            const auto promo = PieceType::fromChar(move[4]);
+
+            if (!promo.isValidPromotion()) {
+                return kNullMove;
+            }
+
+            return Move::promotion(src, dst, promo);
+        } else {
+            const auto srcPiece = pieceOn(src);
+
+            if (srcPiece == Pieces::kBlackKing || srcPiece == Pieces::kWhiteKing) {
+                if (g_opts.chess960) {
+                    if (pieceOn(dst) == srcPiece.copyColor(PieceTypes::kRook)) {
+                        return Move::castling(src, dst);
+                    } else {
+                        return Move::standard(src, dst);
+                    }
+                } else if (std::abs(src.file() - dst.file()) == 2) {
+                    const auto dstSq = src.withFile(src.file() < dst.file() ? kFileH : kFileA);
+                    return Move::castling(src, dstSq);
+                }
+            }
+
+            if ((srcPiece == Pieces::kBlackPawn || srcPiece == Pieces::kWhitePawn) && dst == m_enPassant) {
+                return Move::enPassant(src, dst);
+            }
+
+            return Move::standard(src, dst);
+        }
+    }
+
+    Position Position::startpos() {
+        Position pos{};
+
+        pos.m_bbs.bb(PieceTypes::kPawn) = U64(0x00FF00000000FF00);
+        pos.m_bbs.bb(PieceTypes::kKnight) = U64(0x4200000000000042);
+        pos.m_bbs.bb(PieceTypes::kBishop) = U64(0x2400000000000024);
+        pos.m_bbs.bb(PieceTypes::kRook) = U64(0x8100000000000081);
+        pos.m_bbs.bb(PieceTypes::kQueen) = U64(0x0800000000000008);
+        pos.m_bbs.bb(PieceTypes::kKing) = U64(0x1000000000000010);
+
+        pos.m_bbs.bb(Colors::kBlack) = U64(0xFFFF000000000000);
+        pos.m_bbs.bb(Colors::kWhite) = U64(0x000000000000FFFF);
+
+        pos.m_castlingRooks.black().kingside = Squares::kH8;
+        pos.m_castlingRooks.black().queenside = Squares::kA8;
+        pos.m_castlingRooks.white().kingside = Squares::kH1;
+        pos.m_castlingRooks.white().queenside = Squares::kA1;
+
+        pos.m_stm = Colors::kWhite;
+        pos.m_fullmove = 1;
+
+        pos.regen();
+
+        return pos;
+    }
+
+    std::optional<Position> Position::fromFenParts(std::span<const std::string_view> fen) {
+        if (fen.size() < 4 || fen.size() > 6) {
+            eprintln("wrong number of FEN parts");
+            return {};
+        }
+
+        Position pos{};
+        const auto& bbs = pos.bbs();
+
+        i32 rankIdx = 0;
+
+        std::vector<std::string_view> ranks{};
+        split::split(ranks, fen[0], '/');
+
+        for (const auto rank : ranks) {
+            if (rankIdx >= 8) {
+                eprintln("too many ranks");
+                return {};
+            }
+
+            i32 fileIdx = 0;
+
+            for (const auto c : rank) {
+                if (fileIdx >= 8) {
+                    eprintln("too many files in rank {}", rankIdx);
+                    return {};
+                }
+
+                if (const auto emptySquares = util::tryParseDigit(c)) {
+                    fileIdx += *emptySquares;
+                } else if (const auto piece = Piece::fromChar(c); piece != Pieces::kNone) {
+                    pos.setPieceInternal(Square::fromFileRank(fileIdx, 7 - rankIdx), piece);
+                    ++fileIdx;
+                } else {
+                    eprintln("invalid piece character {}", c);
+                    return {};
+                }
+            }
+
+            // last character was a digit
+            if (fileIdx > 8) {
+                eprintln("too many files in rank {}", rankIdx);
+                return {};
+            }
+
+            if (fileIdx < 8) {
+                eprintln("not enough files in rank {}", rankIdx);
+                return {};
+            }
+
+            ++rankIdx;
+        }
+
+        if (const auto blackKingCount = pos.bb(Pieces::kBlackKing).popcount(); blackKingCount != 1) {
+            eprintln("black must have exactly 1 king, but has {}", blackKingCount);
+            return {};
+        }
+
+        if (const auto whiteKingCount = pos.bb(Pieces::kWhiteKing).popcount(); whiteKingCount != 1) {
+            eprintln("white must have exactly 1 king, but has {}", whiteKingCount);
+            return {};
+        }
+
+        if (pos.occ().popcount() > 32) {
+            eprintln("too many pieces");
+            return {};
+        }
+
+        const auto color = fen[1];
+
+        if (color.length() != 1) {
+            eprintln("invalid side to move");
+            return {};
+        }
+
+        switch (color[0]) {
+            case 'b':
+                pos.m_stm = Colors::kBlack;
+                break;
+            case 'w':
+                pos.m_stm = Colors::kWhite;
+                break;
+            default:
+                eprintln("invalid side to move");
+                return {};
+        }
+
+        if (const auto stm = pos.stm();
+            pos.isAttacked<false>(stm, bbs.bb(PieceTypes::kKing, stm.flip()).lowestSquare(), stm))
+        {
+            eprintln("opponent must not be in check");
+            return {};
+        }
+
+        const auto castlingRights = fen[2];
+
+        if (castlingRights.length() > 4) {
+            eprintln("invalid castling rights");
+            return {};
+        }
+
+        if (castlingRights != "-") {
+            if (g_opts.chess960) {
+                for (i32 rank = 0; rank < 8; ++rank) {
+                    for (i32 file = 0; file < 8; ++file) {
+                        const auto sq = Square::fromFileRank(file, rank);
+
+                        const auto piece = pos.pieceOn(sq);
+                        if (piece != Pieces::kNone && piece.type() == PieceTypes::kKing) {
+                            pos.m_kings.color(piece.color()) = sq;
+                        }
+                    }
+                }
+
+                for (const auto flag : castlingRights) {
+                    if (flag >= 'a' && flag <= 'h') {
+                        const auto file = static_cast<i32>(flag - 'a');
+                        const auto kingFile = pos.m_kings.black().file();
+
+                        if (file == kingFile) {
+                            eprintln("invalid castling rights");
+                            return {};
+                        }
+
+                        if (file < kingFile) {
+                            pos.m_castlingRooks.black().queenside = Square::fromFileRank(file, kRank8);
+                        } else {
+                            pos.m_castlingRooks.black().kingside = Square::fromFileRank(file, kRank8);
+                        }
+                    } else if (flag >= 'A' && flag <= 'H') {
+                        const auto file = static_cast<i32>(flag - 'A');
+                        const auto kingFile = pos.m_kings.white().file();
+
+                        if (file == kingFile) {
+                            eprintln("invalid castling rights");
+                            return {};
+                        }
+
+                        if (file < kingFile) {
+                            pos.m_castlingRooks.white().queenside = Square::fromFileRank(file, kRank1);
+                        } else {
+                            pos.m_castlingRooks.white().kingside = Square::fromFileRank(file, kRank1);
+                        }
+                    } else if (flag == 'k') {
+                        for (i32 file = pos.m_kings.black().file() + 1; file < 8; ++file) {
+                            const auto sq = Square::fromFileRank(file, kRank8);
+                            if (pos.pieceOn(sq) == Pieces::kBlackRook) {
+                                pos.m_castlingRooks.black().kingside = sq;
+                                break;
+                            }
+                        }
+                    } else if (flag == 'K') {
+                        for (i32 file = pos.m_kings.white().file() + 1; file < 8; ++file) {
+                            const auto sq = Square::fromFileRank(file, kRank1);
+                            if (pos.pieceOn(sq) == Pieces::kWhiteRook) {
+                                pos.m_castlingRooks.white().kingside = sq;
+                                break;
+                            }
+                        }
+                    } else if (flag == 'q') {
+                        for (i32 file = pos.m_kings.black().file() - 1; file >= 0; --file) {
+                            const auto sq = Square::fromFileRank(file, kRank8);
+                            if (pos.pieceOn(sq) == Pieces::kBlackRook) {
+                                pos.m_castlingRooks.black().queenside = sq;
+                                break;
+                            }
+                        }
+                    } else if (flag == 'Q') {
+                        for (i32 file = pos.m_kings.white().file() - 1; file >= 0; --file) {
+                            const auto sq = Square::fromFileRank(file, kRank1);
+                            if (pos.pieceOn(sq) == Pieces::kWhiteRook) {
+                                pos.m_castlingRooks.white().queenside = sq;
+                                break;
+                            }
+                        }
+                    } else {
+                        eprintln("invalid castling rights");
+                        return {};
+                    }
+                }
+            } else {
+                for (const auto flag : castlingRights) {
+                    switch (flag) {
+                        case 'k':
+                            pos.m_castlingRooks.black().kingside = Squares::kH8;
+                            break;
+                        case 'q':
+                            pos.m_castlingRooks.black().queenside = Squares::kA8;
+                            break;
+                        case 'K':
+                            pos.m_castlingRooks.white().kingside = Squares::kH1;
+                            break;
+                        case 'Q':
+                            pos.m_castlingRooks.white().queenside = Squares::kA1;
+                            break;
+                        default:
+                            eprintln("invalid castling rights");
+                            return {};
+                    }
+                }
+            }
+        }
+
+        const auto enPassant = fen[3];
+
+        if (enPassant != "-") {
+            if (pos.m_enPassant = Square::fromStr(enPassant); pos.m_enPassant == Squares::kNone) {
+                eprintln("invalid en passant square");
+                return {};
+            }
+        }
+
+        if (fen.size() >= 5) {
+            const auto halfmove = fen[4];
+            if (!util::tryParse(pos.m_halfmove, halfmove)) {
+                eprintln("invalid halfmove clock");
+                return {};
+            }
+        }
+
+        if (fen.size() >= 6) {
+            const auto fullmove = fen[5];
+            if (!util::tryParse(pos.m_fullmove, fullmove)) {
+                eprintln("invalid fullmove number");
+                return {};
+            }
+        }
+
+        // a couple of extra checks here
+        if (pos.m_enPassant != Squares::kNone) {
+            [&] {
+                const auto epRank = pos.m_stm == Colors::kBlack ? kRank3 : kRank6;
+                if (pos.m_enPassant.rank() != epRank) {
+                    pos.m_enPassant = Squares::kNone;
+                    return;
+                }
+
+                const auto pawnSquare = pos.m_enPassant.flipRankParity();
+                const auto origSquare = pawnSquare.flipDoublePush();
+
+                const auto oppPawn = PieceTypes::kPawn.withColor(pos.m_stm.flip());
+
+                // make sure that there's actually a pawn there that could've moved
+                if (pos.pieceOn(pawnSquare) != oppPawn               //
+                    || pos.pieceOn(pos.m_enPassant) != Pieces::kNone //
+                    || pos.pieceOn(origSquare) != Pieces::kNone)
+                {
+                    pos.m_enPassant = Squares::kNone;
+                    return;
+                }
+
+                // and ensure that the previous position would've actually
+                // been legal if the previous move was a double push
+                pos.movePieceInternal(pawnSquare, origSquare, oppPawn);
+                const bool illegal = pos.isAttacked<false>(
+                    pos.m_stm.flip(),
+                    bbs.bb(PieceTypes::kKing, pos.m_stm).lowestSquare(),
+                    pos.m_stm.flip()
+                );
+                pos.movePieceInternal(origSquare, pawnSquare, oppPawn);
+
+                if (illegal) {
+                    pos.m_enPassant = Squares::kNone;
+                    return;
+                }
+            }();
+        }
+
+        pos.regen();
+
+        return pos;
+    }
+
+    std::optional<Position> Position::fromFen(std::string_view fen) {
+        std::vector<std::string_view> parts{};
+        parts.reserve(6);
+
+        split::split(parts, fen, ' ');
+
+        return fromFenParts(parts);
+    }
+
+    std::optional<Position> Position::fromFrcIndex(u32 n) {
+        assert(g_opts.chess960);
+
+        if (n >= 960) {
+            eprintln("invalid frc position index {}", n);
+            return {};
+        }
+
+        Position pos{};
+
+        pos.m_bbs.bb(PieceTypes::kPawn) = U64(0x00FF00000000FF00);
+
+        pos.m_bbs.bb(Colors::kBlack) = U64(0x00FF000000000000);
+        pos.m_bbs.bb(Colors::kWhite) = U64(0x000000000000FF00);
+
+        const auto backrank = scharnaglToBackrank(n);
+
+        bool firstRook = true;
+
+        for (i32 file = 0; file < 8; ++file) {
+            const auto blackSquare = Square::fromFileRank(file, kRank8);
+            const auto whiteSquare = Square::fromFileRank(file, kRank1);
+
+            pos.setPieceInternal(blackSquare, backrank[file].withColor(Colors::kBlack));
+            pos.setPieceInternal(whiteSquare, backrank[file].withColor(Colors::kWhite));
+
+            if (backrank[file] == PieceTypes::kRook) {
+                if (firstRook) {
+                    pos.m_castlingRooks.black().queenside = blackSquare;
+                    pos.m_castlingRooks.white().queenside = whiteSquare;
+                } else {
+                    pos.m_castlingRooks.black().kingside = blackSquare;
+                    pos.m_castlingRooks.white().kingside = whiteSquare;
+                }
+
+                firstRook = false;
+            }
+        }
+
+        pos.m_stm = Colors::kWhite;
+        pos.m_fullmove = 1;
+
+        pos.regen();
+
+        return pos;
+    }
+
+    std::optional<Position> Position::fromDfrcIndex(u32 n) {
+        assert(g_opts.chess960);
+
+        if (n >= 960 * 960) {
+            eprintln("invalid dfrc position index {}", n);
+            return {};
+        }
+
+        Position pos{};
+
+        pos.m_bbs.bb(PieceTypes::kPawn) = U64(0x00FF00000000FF00);
+
+        pos.m_bbs.bb(Colors::kBlack) = U64(0x00FF000000000000);
+        pos.m_bbs.bb(Colors::kWhite) = U64(0x000000000000FF00);
+
+        const auto blackBackrank = scharnaglToBackrank(n / 960);
+        const auto whiteBackrank = scharnaglToBackrank(n % 960);
+
+        bool firstBlackRook = true;
+        bool firstWhiteRook = true;
+
+        for (i32 file = 0; file < 8; ++file) {
+            const auto blackSquare = Square::fromFileRank(file, kRank8);
+            const auto whiteSquare = Square::fromFileRank(file, kRank1);
+
+            pos.setPieceInternal(blackSquare, blackBackrank[file].withColor(Colors::kBlack));
+            pos.setPieceInternal(whiteSquare, whiteBackrank[file].withColor(Colors::kWhite));
+
+            if (blackBackrank[file] == PieceTypes::kRook) {
+                if (firstBlackRook) {
+                    pos.m_castlingRooks.black().queenside = blackSquare;
+                } else {
+                    pos.m_castlingRooks.black().kingside = blackSquare;
+                }
+
+                firstBlackRook = false;
+            }
+
+            if (whiteBackrank[file] == PieceTypes::kRook) {
+                if (firstWhiteRook) {
+                    pos.m_castlingRooks.white().queenside = whiteSquare;
+                } else {
+                    pos.m_castlingRooks.white().kingside = whiteSquare;
+                }
+
+                firstWhiteRook = false;
+            }
+        }
+
+        pos.m_stm = Colors::kWhite;
+        pos.m_fullmove = 1;
+
+        pos.regen();
+
+        return pos;
+    }
+
+    template <bool kUpdateKey>
+    void Position::setPiece(Piece piece, Square sq) {
+        assert(piece != Pieces::kNone);
+        assert(sq != Squares::kNone);
+
+        assert(piece.type() != PieceTypes::kKing);
+
+        setPieceInternal(sq, piece);
+
+        if constexpr (kUpdateKey) {
+            m_keys.flipPiece(piece, sq);
+        }
+    }
+
+    template void Position::setPiece<false>(Piece, Square);
+    template void Position::setPiece<true>(Piece, Square);
+
+    template <bool kUpdateKey>
+    void Position::removePiece(Piece piece, Square sq) {
+        assert(piece != Pieces::kNone);
+        assert(sq != Squares::kNone);
+
+        assert(piece.type() != PieceTypes::kKing);
+
+        removePieceInternal(sq, piece);
+
+        if constexpr (kUpdateKey) {
+            m_keys.flipPiece(piece, sq);
+        }
+    }
+
+    template void Position::removePiece<false>(Piece, Square);
+    template void Position::removePiece<true>(Piece, Square);
+
+    template <bool kUpdateKey, typename Observer>
+    Piece Position::movePiece(Piece piece, Square src, Square dst, Observer observer) {
+        assert(piece != Pieces::kNone);
+
+        assert(src != Squares::kNone);
+        assert(dst != Squares::kNone);
+        assert(src != dst);
+
+        if (piece.type() == PieceTypes::kKing) {
+            const auto color = piece.color();
+            observer.prepareKingMove(color, m_kings.color(color), dst);
+            m_kings.color(color) = dst;
+        }
+
+        const auto captured = pieceOn(dst);
+
+        if (captured != Pieces::kNone) {
+            removePieceInternal(src, piece);
+            observer.pieceRemoved(*this, piece, src);
+            removePieceInternal(dst, captured);
+            setPieceInternal(dst, piece);
+            observer.pieceMutated(*this, captured, piece, dst);
+            if constexpr (kUpdateKey) {
+                m_keys.flipPiece(captured, dst);
+            }
+        } else {
+            movePieceInternal(src, dst, piece);
+            observer.pieceMoved(*this, piece, src, dst);
+        }
+
+        if constexpr (kUpdateKey) {
+            m_keys.movePiece(piece, src, dst);
+        }
+
+        return captured;
+    }
+
+    template Piece Position::movePiece<false, NullObserver>(Piece, Square, Square, NullObserver);
+    template Piece Position::movePiece<true, NullObserver>(Piece, Square, Square, NullObserver);
+    template Piece Position::movePiece<false, NnueObserver>(Piece, Square, Square, NnueObserver);
+    template Piece Position::movePiece<true, NnueObserver>(Piece, Square, Square, NnueObserver);
+
+    template <bool kUpdateKey, typename Observer>
+    Piece Position::promotePawn(Piece pawn, Square src, Square dst, PieceType promo, Observer observer) {
+        assert(pawn != Pieces::kNone);
+        assert(pawn.type() == PieceTypes::kPawn);
+
+        assert(src != Squares::kNone);
+        assert(dst != Squares::kNone);
+        assert(src != dst);
+
+        assert(dst.rank() == relativeRank(pawn.color(), 7));
+        assert(src.rank() == relativeRank(pawn.color(), 6));
+
+        assert(promo != PieceTypes::kNone);
+
+        const auto captured = pieceOn(dst);
+        const auto coloredPromo = pawn.copyColor(promo);
+
+        if (captured != Pieces::kNone) {
+            removePieceInternal(src, pawn);
+            observer.pieceRemoved(*this, pawn, src);
+            removePieceInternal(dst, captured);
+            setPieceInternal(dst, coloredPromo);
+            observer.pieceMutated(*this, captured, coloredPromo, dst);
+            if constexpr (kUpdateKey) {
+                m_keys.flipPiece(captured, dst);
+            }
+        } else {
+            moveAndChangePieceInternal(src, dst, pawn, promo);
+            observer.piecePromoted(*this, pawn, src, coloredPromo, dst);
+        }
+
+        if constexpr (kUpdateKey) {
+            m_keys.flipPiece(pawn, src);
+            m_keys.flipPiece(coloredPromo, dst);
+        }
+
+        return captured;
+    }
+
+    template Piece Position::promotePawn<false, NullObserver>(Piece, Square, Square, PieceType, NullObserver);
+    template Piece Position::promotePawn<true, NullObserver>(Piece, Square, Square, PieceType, NullObserver);
+    template Piece Position::promotePawn<false, NnueObserver>(Piece, Square, Square, PieceType, NnueObserver);
+    template Piece Position::promotePawn<true, NnueObserver>(Piece, Square, Square, PieceType, NnueObserver);
+
+    template <bool kUpdateKey, typename Observer>
+    void Position::castle(Piece king, Square kingSrc, Square rookSrc, Observer observer) {
+        assert(king != Pieces::kNone);
+        assert(king.type() == PieceTypes::kKing);
+
+        assert(kingSrc != Squares::kNone);
+        assert(rookSrc != Squares::kNone);
+        assert(kingSrc != rookSrc);
+
+        Square kingDst, rookDst;
+
+        if (kingSrc.file() < rookSrc.file()) {
+            // short
+            kingDst = kingSrc.withFile(kFileG);
+            rookDst = kingSrc.withFile(kFileF);
+        } else {
+            // long
+            kingDst = kingSrc.withFile(kFileC);
+            rookDst = kingSrc.withFile(kFileD);
+        }
+
+        observer.prepareKingMove(king.color(), kingSrc, kingDst);
+
+        m_kings.color(king.color()) = kingDst;
+
+        const auto rook = king.copyColor(PieceTypes::kRook);
+
+        removePieceInternal(kingSrc, king);
+        observer.pieceRemoved(*this, king, kingSrc);
+
+        removePieceInternal(rookSrc, rook);
+        observer.pieceRemoved(*this, rook, rookSrc);
+
+        setPieceInternal(kingDst, king);
+        observer.pieceAdded(*this, king, kingDst);
+
+        setPieceInternal(rookDst, rook);
+        observer.pieceAdded(*this, rook, rookDst);
+
+        if constexpr (kUpdateKey) {
+            m_keys.movePiece(king, kingSrc, kingDst);
+            m_keys.movePiece(rook, rookSrc, rookDst);
+        }
+    }
+
+    template void Position::castle<false, NullObserver>(Piece, Square, Square, NullObserver);
+    template void Position::castle<true, NullObserver>(Piece, Square, Square, NullObserver);
+    template void Position::castle<false, NnueObserver>(Piece, Square, Square, NnueObserver);
+    template void Position::castle<true, NnueObserver>(Piece, Square, Square, NnueObserver);
+
+    template <bool kUpdateKey, typename Observer>
+    Piece Position::enPassant(Piece pawn, Square src, Square dst, Observer observer) {
+        assert(pawn != Pieces::kNone);
+        assert(pawn.type() == PieceTypes::kPawn);
+
+        assert(src != Squares::kNone);
+        assert(dst != Squares::kNone);
+        assert(src != dst);
+
+        const auto captureSquare = dst.flipRankParity();
+        const auto enemyPawn = pawn.flipColor();
+
+        removePieceInternal(captureSquare, enemyPawn);
+        observer.pieceRemoved(*this, enemyPawn, captureSquare);
+
+        movePieceInternal(src, dst, pawn);
+        observer.pieceMoved(*this, pawn, src, dst);
+
+        if constexpr (kUpdateKey) {
+            m_keys.movePiece(pawn, src, dst);
+            m_keys.flipPiece(enemyPawn, captureSquare);
+        }
+
+        return enemyPawn;
+    }
+
+    template Piece Position::enPassant<false, NullObserver>(Piece, Square, Square, NullObserver);
+    template Piece Position::enPassant<true, NullObserver>(Piece, Square, Square, NullObserver);
+    template Piece Position::enPassant<false, NnueObserver>(Piece, Square, Square, NnueObserver);
+    template Piece Position::enPassant<true, NnueObserver>(Piece, Square, Square, NnueObserver);
+
+    void Position::setPieceInternal(Square sq, Piece piece) {
+        assert(sq != Squares::kNone);
+        assert(piece != Pieces::kNone);
+
+        assert(pieceOn(sq) == Pieces::kNone);
+
+        mailboxSlot(sq) = piece;
+
+        const auto mask = Bitboard::fromSquare(sq);
+
+        m_bbs.bb(piece.type()) ^= mask;
+        m_bbs.bb(piece.color()) ^= mask;
+    }
+
+    void Position::movePieceInternal(Square src, Square dst, Piece piece) {
+        assert(src != Squares::kNone);
+        assert(dst != Squares::kNone);
+
+        if (mailboxSlot(src) == piece) [[likely]] {
+            mailboxSlot(src) = Pieces::kNone;
+        }
+
+        mailboxSlot(dst) = piece;
+
+        const auto mask = Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst);
+
+        m_bbs.bb(piece.type()) ^= mask;
+        m_bbs.bb(piece.color()) ^= mask;
+    }
+
+    void Position::moveAndChangePieceInternal(Square src, Square dst, Piece moving, PieceType promo) {
+        assert(src != Squares::kNone);
+        assert(dst != Squares::kNone);
+        assert(src != dst);
+
+        assert(moving != Pieces::kNone);
+        assert(promo != PieceTypes::kNone);
+
+        assert(pieceOn(src) == moving);
+        assert(mailboxSlot(src) == moving);
+
+        mailboxSlot(src) = Pieces::kNone;
+        mailboxSlot(dst) = moving.copyColor(promo);
+
+        m_bbs.bb(moving.type()).clearSq(src);
+        m_bbs.bb(promo).setSq(dst);
+
+        const auto mask = Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst);
+        m_bbs.bb(moving.color()) ^= mask;
+    }
+
+    void Position::removePieceInternal(Square sq, Piece piece) {
+        assert(sq != Squares::kNone);
+        assert(piece != Pieces::kNone);
+
+        assert(pieceOn(sq) == piece);
+
+        mailboxSlot(sq) = Pieces::kNone;
+
+        m_bbs.bb(piece.type()).clearSq(sq);
+        m_bbs.bb(piece.color()).clearSq(sq);
+    }
+
+    void Position::calcCheckersAndPins() {
+        m_checkers = nonSliderAttackersTo(m_kings.color(m_stm), m_stm.flip());
+        m_pinned = {};
+
+        for (const auto c : {Colors::kBlack, Colors::kWhite}) {
+            auto& pinned = m_pinned[c.idx()];
+
+            const auto king = m_kings.color(c);
+            const auto opponent = c.flip();
+
+            const auto ourOcc = bb(c);
+            const auto oppOcc = bb(opponent);
+
+            const auto oppQueens = m_bbs.queens(opponent);
+
+            const auto potentialAttackers =
+                attacks::getBishopAttacks(king, oppOcc) & (oppQueens | m_bbs.bishops(opponent))
+                | attacks::getRookAttacks(king, oppOcc) & (oppQueens | m_bbs.rooks(opponent));
+
+            for (const auto potentialAttacker : potentialAttackers) {
+                const auto maybePinned = ourOcc & rayBetween(potentialAttacker, king);
+                if (maybePinned.empty()) {
+                    assert(c == m_stm);
+                    m_checkers.setSq(potentialAttacker);
+                } else if (maybePinned.one()) {
+                    pinned |= maybePinned;
+                }
+            }
+        }
+    }
+
+    void Position::calcThreats() {
+        const auto us = stm();
+        const auto them = us.flip();
+
+        m_threats = Bitboard{};
+
+        const auto occ = this->occ() & ~m_bbs.kings(us);
+        const auto queens = m_bbs.queens(them);
+
+        for (const auto rook : queens | m_bbs.rooks(them)) {
+            m_threats |= attacks::getRookAttacks(rook, occ);
+        }
+
+        for (const auto bishop : queens | m_bbs.bishops(them)) {
+            m_threats |= attacks::getBishopAttacks(bishop, occ);
+        }
+
+        for (const auto knight : m_bbs.knights(them)) {
+            m_threats |= attacks::getKnightAttacks(knight);
+        }
+
+        const auto pawns = m_bbs.pawns(them);
+        if (them == Colors::kBlack) {
+            m_threats |= pawns.shiftDownLeft() | pawns.shiftDownRight();
+        } else {
+            m_threats |= pawns.shiftUpLeft() | pawns.shiftUpRight();
+        }
+
+        m_threats |= attacks::getKingAttacks(m_kings.color(them));
+    }
+
+    void Position::calcCheckZones() {
+        const auto oppKingSq = king(nstm());
+        const auto occ = this->occ();
+
+        m_checkZones[0] = attacks::getPawnAttacks(oppKingSq, nstm());
+        m_checkZones[1] = attacks::getKnightAttacks(oppKingSq);
+        m_checkZones[2] = attacks::getBishopAttacks(oppKingSq, occ);
+        m_checkZones[3] = attacks::getRookAttacks(oppKingSq, occ);
+    }
+
+    void Position::filterEp(Color capturing) {
+        if (m_enPassant == Squares::kNone) {
+            return;
+        }
+
+        const auto unset = [this] {
+            m_keys.flipEp(m_enPassant);
+            m_enPassant = Squares::kNone;
+        };
+
+        const auto movedPawn = m_enPassant.flipRankParity();
+
+        // if we are in check, we must be checked by the pushed pawn only for ep to be valid
+        if (!(checkers() & ~movedPawn.bit()).empty()) {
+            unset();
+            return;
+        }
+
+        const auto moved = capturing.flip();
+
+        const auto kingSq = m_kings.color(capturing);
+
+        const auto pinnedPieces = pinned(capturing);
+        auto candidates = m_bbs.pawns(capturing) & attacks::getPawnAttacks(m_enPassant, moved);
+
+        // vertically pinned pawns cannot capture at all
+        const auto vertPinned = pinnedPieces & boards::kFiles[kingSq.file()];
+        candidates &= ~vertPinned;
+
+        if (!candidates) {
+            unset();
+            return;
+        }
+
+        const auto diagPinned = candidates & pinnedPieces;
+
+        if (candidates.multiple()) {
+            // if there are two diagonally pinned pawns, neither can possibly capture
+            if (candidates == diagPinned) {
+                unset();
+            }
+
+            // otherwise, one pawn has to be unpinned, and thus ep is legal.
+            // the discovered check case handled below cannot apply -
+            // the other pawn will still block the potential check.
+
+            // either way, we can stop here
+            return;
+        }
+
+        // if the capturing pawn is pinned, it has to be pinned
+        // along the same diagonal that the capture would occur
+        if (diagPinned) {
+            const auto pinnedPawn = diagPinned.lowestSquare();
+            const auto pinRay = attacks::getBishopAttacks(kingSq, bb(moved)) & rayIntersecting(kingSq, pinnedPawn);
+
+            if (!pinRay.hasSq(m_enPassant)) {
+                unset();
+                return;
+            }
+        }
+
+        // also handle the annoying case where capturing en passant would cause discovered check
+        const auto capturingPawn = candidates.lowestSquare();
+
+        const auto rank = Bitboard::rank(movedPawn.rank());
+        const auto oppRookCandidates = rank & (m_bbs.rooks(moved) | m_bbs.queens(moved));
+
+        // not possible :3
+        if (!rank.hasSq(kingSq) || !oppRookCandidates) {
+            return;
+        }
+
+        const auto pawnlessOcc = occ() ^ movedPawn.bit() ^ capturingPawn.bit();
+        const auto attacks = attacks::getRookAttacks(kingSq, pawnlessOcc);
+
+        if (attacks & oppRookCandidates) {
+            unset();
+        }
+    }
+} // namespace oranj
+
+fmt::format_context::iterator fmt::formatter<oranj::Position>::format(
+    const oranj::Position& value,
+    format_context& ctx
+) const {
+    using namespace oranj;
+
+    for (i32 rank = kRank8; rank >= kRank1; --rank) {
+        format_to(ctx.out(), " +---+---+---+---+---+---+---+---+\n");
+
+        for (i32 file = kFileA; file <= kFileH; ++file) {
+            const auto piece = value.pieceOn(Square::fromFileRank(file, rank));
+            format_to(ctx.out(), " | {}", piece);
+        }
+
+        format_to(ctx.out(), " | {}\n", rank + 1);
+    }
+
+    format_to(ctx.out(), " +---+---+---+---+---+---+---+---+\n");
+    format_to(ctx.out(), "   a   b   c   d   e   f   g   h\n");
+
+    format_to(ctx.out(), "\n");
+
+    format_to(ctx.out(), "{} to move", value.stm() == Colors::kBlack ? "Black" : "White");
+
+    return ctx.out();
+}

@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,54 +25,87 @@
 #include "core.h"
 #include "util/rng.h"
 
-namespace oranj::keys
-{
-	namespace sizes
-	{
-		constexpr usize PieceSquares = 12 * 64;
-		constexpr usize Color = 1;
+namespace oranj::keys {
+    namespace sizes {
+        constexpr usize kPieceSquares = Pieces::kCount * Squares::kCount;
+        constexpr usize kColor = 1;
+        constexpr usize kCastling = 16;
+        constexpr usize kEnPassant = 8;
 
-		constexpr auto Total = PieceSquares + Color;
-	}
+        constexpr auto kTotal = kPieceSquares + kColor + kCastling + kEnPassant;
+    } // namespace sizes
 
-	namespace offsets
-	{
-		constexpr usize PieceSquares = 0;
-		constexpr auto Color = PieceSquares + sizes::PieceSquares;
-	}
+    namespace offsets {
+        constexpr usize kPieceSquares = 0;
+        constexpr auto kColor = kPieceSquares + sizes::kPieceSquares;
+        constexpr auto kCastling = kColor + sizes::kColor;
+        constexpr auto kEnPassant = kCastling + sizes::kCastling;
+    } // namespace offsets
 
-	constexpr auto Keys = []
-	{
-		constexpr auto Seed = U64(0xD06C659954EC904A);
+    constexpr auto kKeys = [] {
+        constexpr auto kSeed = U64(0xD06C659954EC904A);
 
-		std::array<u64, sizes::Total> keys{};
+        std::array<u64, sizes::kTotal> keys{};
 
-		util::rng::Jsf64Rng rng{Seed};
+        util::rng::Jsf64Rng rng{kSeed};
 
-		for (auto &key : keys)
-		{
-			key = rng.nextU64();
-		}
+        for (auto& key : keys) {
+            key = rng.nextU64();
+        }
 
-		return keys;
-	}();
+        return keys;
+    }();
 
-	inline auto pieceSquare(Piece piece, Square square) -> u64
-	{
-		if (piece == Piece::None || square == Square::None)
-			return 0;
+    inline u64 pieceSquare(Piece piece, Square sq) {
+        if (piece == Pieces::kNone || sq == Squares::kNone) {
+            return 0;
+        }
 
-		return Keys[offsets::PieceSquares + static_cast<usize>(square) * 12 + static_cast<usize>(piece)];
-	}
+        return kKeys[offsets::kPieceSquares + sq.idx() * Pieces::kCount + piece.idx()];
+    }
 
-	// for flipping
-	inline auto color()
-	{
-		return Keys[offsets::Color];
-	}
+    // for flipping
+    inline u64 color() {
+        return kKeys[offsets::kColor];
+    }
 
-	inline auto color(Color c)
-	{
-		return c == Color::White ? 0 : color();
-	}
-}
+    inline u64 color(Color c) {
+        return c == Colors::kWhite ? 0 : color();
+    }
+
+    inline u64 castling(const CastlingRooks& castlingRooks) {
+        constexpr usize BlackShort = 0x01;
+        constexpr usize BlackLong = 0x02;
+        constexpr usize WhiteShort = 0x04;
+        constexpr usize WhiteLong = 0x08;
+
+        usize flags{};
+
+        if (castlingRooks.black().kingside != Squares::kNone) {
+            flags |= BlackShort;
+        }
+        if (castlingRooks.black().queenside != Squares::kNone) {
+            flags |= BlackLong;
+        }
+        if (castlingRooks.white().kingside != Squares::kNone) {
+            flags |= WhiteShort;
+        }
+        if (castlingRooks.white().queenside != Squares::kNone) {
+            flags |= WhiteLong;
+        }
+
+        return kKeys[offsets::kCastling + flags];
+    }
+
+    inline u64 enPassant(u32 file) {
+        return kKeys[offsets::kEnPassant + file];
+    }
+
+    inline u64 enPassant(Square sq) {
+        if (sq == Squares::kNone) {
+            return 0;
+        }
+
+        return kKeys[offsets::kEnPassant + sq.file()];
+    }
+} // namespace oranj::keys

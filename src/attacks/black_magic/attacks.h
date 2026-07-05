@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,35 +22,53 @@
 
 #include <array>
 
-#include "../../core.h"
 #include "../../bitboard.h"
+#include "../../core.h"
+#include "../../util/bits.h"
 #include "../util.h"
 #include "data.h"
-#include "../../util/bits.h"
 
-namespace oranj::attacks
-{
-	extern const std::array<Bitboard, black_magic::RookData.tableSize> RookAttacks;
+namespace oranj::attacks::lookup {
+    extern const std::array<Bitboard, black_magic::kRookData.tableSize> g_rookAttacks;
+    extern const std::array<Bitboard, black_magic::kBishopData.tableSize> g_bishopAttacks;
 
-	[[nodiscard]] inline auto getRookIdx(Bitboard occupancy, Square src)
-	{
-		const auto s = static_cast<i32>(src);
+    [[nodiscard]] inline usize getRookIdx(Bitboard occ, Square src) {
+        const auto s = src.idx();
 
-		const auto &data = black_magic::RookData.data[s];
+        const auto& data = black_magic::kRookData.data[s];
 
-		const auto magic = black_magic::Magics[s];
-		const auto shift = black_magic::Shifts[s];
+        const auto magic = black_magic::kRookMagics[s];
+        const auto shift = black_magic::kRookShifts[s];
 
-		return ((occupancy | data.mask) * magic) >> shift;
-	}
+        return ((occ | data.mask) * magic) >> shift;
+    }
 
-	[[nodiscard]] inline auto getRookAttacks(Square src, Bitboard occupancy)
-	{
-		const auto s = static_cast<i32>(src);
+    [[nodiscard]] inline usize getBishopIdx(Bitboard occ, Square src) {
+        const auto s = src.idx();
 
-		const auto &data = black_magic::RookData.data[s];
-		const auto idx = getRookIdx(occupancy, src);
+        const auto& data = black_magic::kBishopData.data[s];
 
-		return RookAttacks[data.offset + idx];
-	}
-}
+        const auto magic = black_magic::kBishopMagics[s];
+        const auto shift = black_magic::kBishopShifts[s];
+
+        return ((occ | data.mask) * magic) >> shift;
+    }
+
+    [[nodiscard]] inline Bitboard getRookAttacks(Square src, Bitboard occ) {
+        const auto s = src.idx();
+
+        const auto& data = black_magic::kRookData.data[s];
+        const auto idx = getRookIdx(occ, src);
+
+        return g_rookAttacks[data.offset + idx];
+    }
+
+    [[nodiscard]] inline Bitboard getBishopAttacks(Square src, Bitboard occ) {
+        const auto s = src.idx();
+
+        const auto& data = black_magic::kBishopData.data[s];
+        const auto idx = getBishopIdx(occ, src);
+
+        return g_bishopAttacks[data.offset + idx];
+    }
+} // namespace oranj::attacks::lookup

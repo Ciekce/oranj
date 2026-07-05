@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,77 +22,36 @@
 
 #include <array>
 
-#include "nnue.h"
-#include "../position/position.h"
 #include "../core.h"
 #include "../correction.h"
-#include "../see.h"
+#include "../position.h"
+#include "nnue_state.h"
 
-namespace oranj::eval
-{
-	// black, white
-	using Contempt = std::array<Score, 2>;
+namespace oranj::eval {
+    using Contempt = std::array<Score, Colors::kCount>;
+    using Optimism = std::array<i32, Colors::kCount>;
 
-	template <bool Correct = true>
-	inline auto adjustEval(const Position &pos, std::span<search::PlayedMove> moves,
-		i32 ply, const CorrectionHistoryTable *correction, i32 eval, i32 *corrDelta = nullptr)
-	{
-		eval = eval * (200 - pos.halfmove()) / 200;
+    template <bool kCorrect = true>
+    [[nodiscard]] Score adjustEval(
+        const Position& pos,
+        const Optimism& optimism,
+        std::span<const u64> keyHistory,
+        const CorrectionHistoryTable* corrhist,
+        i32 eval,
+        i32* corrDelta = nullptr
+    );
 
-		if constexpr (Correct)
-		{
-			const auto corrected = correction->correct(pos, moves, ply, eval);
+    [[nodiscard]] Score staticEval(const Position& pos, NnueState& nnueState, const Contempt& contempt = {});
 
-			if (corrDelta)
-				*corrDelta = std::abs(eval - corrected);
+    template <bool kCorrect = true>
+    [[nodiscard]] Score adjustedStaticEval(
+        const Position& pos,
+        const Optimism& optimism,
+        std::span<const u64> keyHistory,
+        NnueState& nnueState,
+        const CorrectionHistoryTable* corrhist,
+        const Contempt& contempt = {}
+    );
 
-			eval = corrected;
-		}
-
-		return std::clamp(eval, -ScoreWin + 1, ScoreWin - 1);
-	}
-
-	template <bool Scale>
-	inline auto adjustStatic(const Position &pos, const Contempt &contempt, Score eval)
-	{
-		if constexpr (Scale)
-		{
-			const auto bbs = pos.bbs();
-
-			const auto npMaterial
-				= see::values::Alfil  * bbs.alfils ().popcount()
-				+ see::values::Ferz   * bbs.ferzes ().popcount()
-				+ see::values::Knight * bbs.knights().popcount()
-				+ see::values::Rook   * bbs.rooks  ().popcount();
-
-			eval = eval * (13000 + npMaterial) / 16384;
-		}
-
-		eval += contempt[static_cast<i32>(pos.toMove())];
-
-		return std::clamp(eval, -ScoreWin + 1, ScoreWin - 1);
-	}
-
-	template <bool Scale = true>
-	inline auto staticEval(const Position &pos, NnueState &nnueState, const Contempt &contempt = {})
-	{
-		auto eval = nnueState.evaluate(pos.bbs(), pos.kings(), pos.toMove());
-		return adjustStatic<Scale>(pos, contempt, eval);
-	}
-
-	template <bool Correct = true>
-	inline auto adjustedStaticEval(const Position &pos,
-		std::span<search::PlayedMove> moves, i32 ply, NnueState &nnueState,
-		const CorrectionHistoryTable *correction, const Contempt &contempt = {})
-	{
-		const auto eval = staticEval(pos, nnueState, contempt);
-		return adjustEval<Correct>(pos, moves, ply, correction, eval);
-	}
-
-	template <bool Scale = true>
-	inline auto staticEvalOnce(const Position &pos, const Contempt &contempt = {})
-	{
-		auto eval = NnueState::evaluateOnce(pos.bbs(), pos.kings(), pos.toMove());
-		return adjustStatic<Scale>(pos, contempt, eval);
-	}
-}
+    [[nodiscard]] Score staticEvalOnce(const Position& pos, const Contempt& contempt = {});
+} // namespace oranj::eval

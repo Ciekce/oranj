@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,50 +22,68 @@
 
 #include <array>
 
-#include "../../core.h"
 #include "../../bitboard.h"
+#include "../../core.h"
 #include "../util.h"
 
-namespace oranj::attacks::bmi2
-{
-	struct RookSquareData
-	{
-		Bitboard srcMask;
-		Bitboard dstMask;
-		u32 offset;
-	};
+// ignore the duplication pls ty :3
+namespace oranj::attacks::bmi2 {
+    struct RookSquareData {
+        Bitboard srcMask;
+        Bitboard dstMask;
+        u32 offset;
+    };
 
-	struct RookData_
-	{
-		std::array<RookSquareData, 64> data;
-		u32 tableSize;
-	};
+    struct RookData {
+        std::array<RookSquareData, Squares::kCount> data;
+        u32 tableSize;
+    };
 
-	constexpr auto RookData = []
-	{
-		RookData_ dst{};
+    struct BishopSquareData {
+        Bitboard mask;
+        u32 offset;
+    };
 
-		for (u32 i = 0; i < 64; ++i)
-		{
-			const auto square = static_cast<Square>(i);
+    struct BishopData {
+        std::array<BishopSquareData, Squares::kCount> data;
+        u32 tableSize;
+    };
 
-			for (const auto dir : {
-				offsets::Up,
-				offsets::Down,
-				offsets::Left,
-				offsets::Right
-			})
-			{
-				const auto attacks = internal::generateSlidingAttacks(square, dir, 0);
+    constexpr auto kRookData = [] {
+        RookData dst{};
 
-				dst.data[i].srcMask |= attacks & ~internal::edges(dir);
-				dst.data[i].dstMask |= attacks;
-			}
+        for (u32 i = 0; i < Squares::kCount; ++i) {
+            const auto sq = Square::fromRaw(i);
 
-			dst.data[i].offset = dst.tableSize;
-			dst.tableSize += 1 << dst.data[i].srcMask.popcount();
-		}
+            for (const auto dir : {offsets::kUp, offsets::kDown, offsets::kLeft, offsets::kRight}) {
+                const auto attacks = internal::generateSlidingAttacks(sq, dir, 0);
 
-		return dst;
-	}();
-}
+                dst.data[i].srcMask |= attacks & ~internal::edges(dir);
+                dst.data[i].dstMask |= attacks;
+            }
+
+            dst.data[i].offset = dst.tableSize;
+            dst.tableSize += 1 << dst.data[i].srcMask.popcount();
+        }
+
+        return dst;
+    }();
+
+    constexpr auto kBishopData = [] {
+        BishopData dst{};
+
+        for (u32 i = 0; i < Squares::kCount; ++i) {
+            const auto sq = Square::fromRaw(i);
+
+            for (const auto dir : {offsets::kUpLeft, offsets::kUpRight, offsets::kDownLeft, offsets::kDownRight}) {
+                const auto attacks = internal::generateSlidingAttacks(sq, dir, 0);
+                dst.data[i].mask |= attacks & ~internal::edges(dir);
+            }
+
+            dst.data[i].offset = dst.tableSize;
+            dst.tableSize += 1 << dst.data[i].mask.popcount();
+        }
+
+        return dst;
+    }();
+} // namespace oranj::attacks::bmi2

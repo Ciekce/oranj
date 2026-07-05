@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,40 +19,56 @@
 #include "../attacks.h"
 
 #if OJ_HAS_BMI2
-namespace oranj::attacks
-{
-	using namespace bmi2;
+namespace oranj::attacks::lookup {
+    using namespace bmi2;
 
-	namespace
-	{
-		auto generateRookAttacks()
-		{
-			std::array<u16, RookData.tableSize> dst{};
+    namespace {
+        std::array<u16, kRookData.tableSize> generateRookAttacks() {
+            std::array<u16, kRookData.tableSize> dst{};
 
-			for (u32 square = 0; square < 64; ++square)
-			{
-				const auto &data = RookData.data[square];
-				const auto entries = 1 << data.srcMask.popcount();
+            for (u32 sq = 0; sq < Squares::kCount; ++sq) {
+                const auto& data = kRookData.data[sq];
+                const auto entries = 1 << data.srcMask.popcount();
 
-				for (u32 i = 0; i < entries; ++i)
-				{
-					const auto occupancy = util::pdep(i, data.srcMask);
+                for (u32 i = 0; i < entries; ++i) {
+                    const auto occ = util::pdep(i, data.srcMask);
 
-					Bitboard attacks{};
+                    Bitboard attacks{};
 
-					for (const auto dir : {offsets::Up, offsets::Down, offsets::Left, offsets::Right})
-					{
-						attacks |= internal::generateSlidingAttacks(static_cast<Square>(square), dir, occupancy);
-					}
+                    for (const auto dir : {offsets::kUp, offsets::kDown, offsets::kLeft, offsets::kRight}) {
+                        attacks |= internal::generateSlidingAttacks(Square::fromRaw(sq), dir, occ);
+                    }
 
-					dst[data.offset + i] = static_cast<u16>(util::pext(attacks, data.dstMask));
-				}
-			}
+                    dst[data.offset + i] = static_cast<u16>(util::pext(attacks, data.dstMask));
+                }
+            }
 
-			return dst;
-		}
-	}
+            return dst;
+        }
 
-	const std::array<u16, RookData.tableSize> RookAttacks = generateRookAttacks();
-}
+        std::array<Bitboard, kBishopData.tableSize> generateBishopAttacks() {
+            std::array<Bitboard, kBishopData.tableSize> dst{};
+
+            for (u32 sq = 0; sq < Squares::kCount; ++sq) {
+                const auto& data = kBishopData.data[sq];
+                const auto entries = 1 << data.mask.popcount();
+
+                for (u32 i = 0; i < entries; ++i) {
+                    const auto occ = util::pdep(i, data.mask);
+
+                    for (const auto dir :
+                         {offsets::kUpLeft, offsets::kUpRight, offsets::kDownLeft, offsets::kDownRight})
+                    {
+                        dst[data.offset + i] |= internal::generateSlidingAttacks(Square::fromRaw(sq), dir, occ);
+                    }
+                }
+            }
+
+            return dst;
+        }
+    } // namespace
+
+    const std::array<u16, kRookData.tableSize> g_rookAttacks = generateRookAttacks();
+    const std::array<Bitboard, kBishopData.tableSize> g_bishopAttacks = generateBishopAttacks();
+} // namespace oranj::attacks::lookup
 #endif // OJ_HAS_BMI2

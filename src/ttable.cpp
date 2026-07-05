@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,230 +19,247 @@
 #include "ttable.h"
 
 #include <cstring>
-#include <bit>
-#include <iostream>
 #include <thread>
+#include <vector>
 
-#include "util/cemath.h"
+#ifndef _WIN32
+    #include <sys/mman.h>
+#endif
+
+#include "opts.h"
 #include "util/align.h"
+#include "util/cemath.h"
 
-namespace oranj
-{
-	namespace
-	{
-		// for a long time, these were backwards
-		// cheers toanth
-		inline auto scoreToTt(Score score, i32 ply)
-		{
-			if (score < -ScoreWin)
-				return score - ply;
-			else if (score > ScoreWin)
-				return score + ply;
-			return score;
-		}
+namespace oranj {
+    namespace {
+        // for a long time, these were backwards
+        // cheers toanth
+        inline Score scoreToTt(Score score, i32 ply) {
+            if (isLoss(score)) {
+                return score - ply;
+            } else if (isWin(score)) {
+                return score + ply;
+            }
+            return score;
+        }
 
-		inline auto scoreFromTt(Score score, i32 ply)
-		{
-			if (score < -ScoreWin)
-				return score + ply;
-			else if (score > ScoreWin)
-				return score - ply;
-			return score;
-		}
+        inline Score scoreFromTt(Score score, i32 ply, i32 halfmove) {
+            if (isLoss(score)) {
+                if (score < -kScoreTbWin && kScoreMate + score > 100 - halfmove) {
+                    return -kScoreWin + 1;
+                }
 
-		inline auto packEntryKey(u64 key)
-		{
-			return static_cast<u16>(key);
-		}
-	}
+                if (kScoreTbWin + score > 100 - halfmove) {
+                    return -kScoreWin + 1;
+                }
 
-	TTable::TTable(usize size)
-	{
-		resize(size);
-	}
+                return score + ply;
+            } else if (isWin(score)) {
+                if (score > kScoreTbWin && kScoreMate - score > 100 - halfmove) {
+                    return kScoreWin - 1;
+                }
 
-	TTable::~TTable()
-	{
-		if (m_clusters)
-			util::alignedFree(m_clusters);
-	}
+                if (kScoreTbWin - score > 100 - halfmove) {
+                    return kScoreWin - 1;
+                }
 
-	auto TTable::resize(usize mib) -> void
-	{
-		const auto clusters = mib * 1024 * 1024;
-		const auto capacity = clusters / sizeof(Cluster);
+                return score - ply;
+            }
+            return score;
+        }
 
-		// don't bother reallocating if we're already at the right size
-		if (m_clusterCount != capacity)
-		{
-			if (m_clusters)
-				util::alignedFree(m_clusters);
+        inline u16 packEntryKey(u64 key) {
+            return static_cast<u16>(key);
+        }
+    } // namespace
 
-			m_clusters = nullptr;
-			m_clusterCount = capacity;
-		}
+    TTable::TTable(usize size) {
+        resize(size);
+    }
 
-		m_pendingInit = true;
-	}
+    TTable::~TTable() {
+        if (m_clusters) {
+            util::alignedFree(m_clusters);
+        }
+    }
 
-	auto TTable::finalize() -> bool
-	{
-		if (!m_pendingInit)
-			return false;
+    void TTable::resize(usize mib) {
+        const auto clusters = mib * 1024 * 1024;
+        const auto capacity = clusters / sizeof(Cluster);
 
-		m_pendingInit = false;
-		m_clusters = util::alignedAlloc<Cluster>(StorageAlignment, m_clusterCount);
+        // don't bother reallocating if we're already at the right size
+        if (m_clusterCount != capacity) {
+            if (m_clusters) {
+                util::alignedFree(m_clusters);
+            }
 
-		if (!m_clusters)
-		{
-			std::cout << "info string Failed to reallocate TT - out of memory?" << std::endl;
-			std::terminate();
-		}
+            m_clusters = nullptr;
+            m_clusterCount = capacity;
+        }
 
-		clear();
+        m_pendingInit = true;
+    }
 
-		return true;
-	}
+    bool TTable::finalize() {
+        if (!m_pendingInit) {
+            return false;
+        }
 
-	auto TTable::probe(ProbedTTableEntry &dst, u64 key, i32 ply) const -> bool
-	{
-		assert(!m_pendingInit);
+        m_pendingInit = false;
 
-		const auto packedKey = packEntryKey(key);
+        if (!m_clusters) {
+#ifdef MADV_HUGEPAGE
+            //TODO handle 1GiB huge pages?
+            static constexpr usize kHugePageSize = 2 * 1024 * 1024;
 
-		const auto &cluster = m_clusters[index(key)];
-		for (const auto entry : cluster.entries)
-		{
-			if (packedKey == entry.key)
-			{
-				dst.score = scoreFromTt(static_cast<Score>(entry.score), ply);
-				dst.staticEval = static_cast<Score>(entry.staticEval);
-				dst.depth = entry.depth;
-				dst.move = entry.move;
-				dst.wasPv = entry.pv();
-				dst.flag = entry.flag();
+            const auto size = m_clusterCount * sizeof(Cluster);
+            const auto alignment = size >= kHugePageSize ? kHugePageSize : kDefaultStorageAlignment;
+#else
+            const auto alignment = kDefaultStorageAlignment;
+#endif
 
-				return true;
-			}
-		}
+            m_clusters = util::alignedAlloc<Cluster>(alignment, m_clusterCount);
 
-		return false;
-	}
+            if (!m_clusters) {
+                println("info string Failed to reallocate TT - out of memory?");
+                std::terminate();
+            }
 
-	auto TTable::put(u64 key, Score score, Score staticEval,
-		Move move, i32 depth, i32 ply, TtFlag flag, bool pv) -> void
-	{
-		assert(!m_pendingInit);
+#ifdef MADV_HUGEPAGE
+            madvise(m_clusters, size, MADV_HUGEPAGE);
+#endif
+        }
 
-		assert(depth >= 0);
-		assert(depth <= MaxDepth);
+        clear();
 
-		assert(staticEval == ScoreNone || staticEval > -ScoreWin);
-		assert(staticEval == ScoreNone || staticEval <  ScoreWin);
+        return true;
+    }
 
-		const auto newKey = packEntryKey(key);
+    bool TTable::probe(ProbedTTableEntry& dst, u64 key, i32 ply, i32 halfmove) const {
+        assert(!m_pendingInit);
 
-		const auto entryValue = [this](const auto &entry)
-		{
-			const i32 relativeAge = (Entry::AgeCycle + m_age - entry.age()) & Entry::AgeMask;
-			return entry.depth - relativeAge * 2;
-		};
+        const auto packedKey = packEntryKey(key);
 
-		auto &cluster = m_clusters[index(key)];
+        const auto& cluster = m_clusters[index(key)];
+        for (const auto entry : cluster.entries) {
+            if (entry.filled() && packedKey == entry.key) {
+                dst.score = scoreFromTt(static_cast<Score>(entry.score), ply, halfmove);
+                dst.staticEval = static_cast<Score>(entry.staticEval);
+                dst.depth = entry.depth();
+                dst.move = entry.move;
+                dst.wasPv = entry.pv();
+                dst.flag = entry.flag();
 
-		Entry *entryPtr = nullptr;
-		auto minValue = std::numeric_limits<i32>::max();
+                return true;
+            }
+        }
 
-		for (auto &candidate : cluster.entries)
-		{
-			// always take an empty entry, or one from the same position
-			if (candidate.key == newKey || candidate.flag() == TtFlag::None)
-			{
-				entryPtr = &candidate;
-				break;
-			}
+        return false;
+    }
 
-			// otherwise, take the lowest-weighted entry by depth and age
-			const auto value = entryValue(candidate);
+    void TTable::put(u64 key, Score score, Score staticEval, Move move, i32 depth, i32 ply, TtFlag flag, bool pv) {
+        assert(!m_pendingInit);
 
-			if (value < minValue)
-			{
-				entryPtr = &candidate;
-				minValue = value;
-			}
-		}
+        assert(depth > -kDepthOffset);
+        assert(depth <= kMaxDepth);
 
-		assert(entryPtr != nullptr);
+        assert(staticEval == kScoreNone || staticEval > -kScoreWin);
+        assert(staticEval == kScoreNone || staticEval < kScoreWin);
 
-		auto entry = *entryPtr;
+        const auto newKey = packEntryKey(key);
 
-		// Roughly the SF replacement scheme
-		if (!(flag == TtFlag::Exact
-			|| newKey != entry.key
-			|| entry.age() != m_age
-			|| depth + 4 + pv * 2 > entry.depth))
-			return;
+        const auto entryValue = [this](const auto& entry) {
+            const i32 relativeAge = (Entry::kAgeCycle + m_age - entry.age()) & Entry::kAgeMask;
+            return entry.depth() - relativeAge * 2;
+        };
 
-		if (move || entry.key != newKey)
-			entry.move = move;
+        auto& cluster = m_clusters[index(key)];
 
-		entry.key = newKey;
-		entry.score = static_cast<i16>(scoreToTt(score, ply));
-		entry.staticEval = static_cast<i16>(staticEval);
-		entry.depth = depth;
-		entry.setAgePvFlag(m_age, pv, flag);
+        Entry* entryPtr = nullptr;
+        auto minValue = std::numeric_limits<i32>::max();
 
-		*entryPtr = entry;
-	}
+        for (auto& candidate : cluster.entries) {
+            // always take an empty entry, or one from the same position
+            if (!candidate.filled() || candidate.key == newKey) {
+                entryPtr = &candidate;
+                break;
+            }
 
-	auto TTable::clear() -> void
-	{
-		assert(!m_pendingInit);
+            // otherwise, take the lowest-weighted entry by depth and age
+            const auto value = entryValue(candidate);
 
-		const auto threadCount = g_opts.threads;
+            if (value < minValue) {
+                entryPtr = &candidate;
+                minValue = value;
+            }
+        }
 
-		std::vector<std::thread> threads{};
-		threads.reserve(threadCount);
+        assert(entryPtr != nullptr);
 
-		const auto chunkSize = util::ceilDiv<usize>(m_clusterCount, threadCount);
+        auto entry = *entryPtr;
 
-		for (u32 i = 0; i < threadCount; ++i)
-		{
-			threads.emplace_back([this, chunkSize, i]
-			{
-				const auto start = chunkSize * i;
-				const auto end = std::min(start + chunkSize, m_clusterCount);
+        // Roughly the SF replacement scheme
+        if (!(flag == TtFlag::kExact || newKey != entry.key || entry.age() != m_age
+              || depth + 4 + pv * 2 > entry.depth()))
+        {
+            return;
+        }
 
-				const auto count = end - start;
+        if (move || entry.key != newKey) {
+            entry.move = move;
+        }
 
-				std::memset(&m_clusters[start], 0, count * sizeof(Cluster));
-			});
-		}
+        entry.key = newKey;
+        entry.score = static_cast<i16>(scoreToTt(score, ply));
+        entry.staticEval = static_cast<i16>(staticEval);
+        entry.setDepth(depth);
+        entry.setAgePvFlag(m_age, pv, flag);
 
-		m_age = 0;
+        *entryPtr = entry;
+    }
 
-		for (auto &thread : threads)
-		{
-			thread.join();
-		}
-	}
+    void TTable::clear() {
+        assert(!m_pendingInit);
 
-	auto TTable::full() const -> u32
-	{
-		assert(!m_pendingInit);
+        const auto threadCount = g_opts.threads;
 
-		u32 filledEntries{};
+        std::vector<std::thread> threads{};
+        threads.reserve(threadCount);
 
-		for (u64 i = 0; i < 1000; ++i)
-		{
-			const auto cluster = m_clusters[i];
-			for (const auto &entry : cluster.entries)
-			{
-				if (entry.flag() != TtFlag::None && entry.age() == m_age)
-					++filledEntries;
-			}
-		}
+        const auto chunkSize = util::ceilDiv<usize>(m_clusterCount, threadCount);
 
-		return filledEntries / Cluster::EntriesPerCluster;
-	}
-}
+        for (u32 i = 0; i < threadCount; ++i) {
+            threads.emplace_back([this, chunkSize, i] {
+                const auto start = chunkSize * i;
+                const auto end = std::min(start + chunkSize, m_clusterCount);
+
+                const auto count = end - start;
+
+                std::memset(&m_clusters[start], 0, count * sizeof(Cluster));
+            });
+        }
+
+        m_age = 0;
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    }
+
+    u32 TTable::full() const {
+        assert(!m_pendingInit);
+
+        u32 filledEntries{};
+
+        for (u64 i = 0; i < 1000; ++i) {
+            const auto cluster = m_clusters[i];
+            for (const auto& entry : cluster.entries) {
+                if (entry.filled() && entry.age() == m_age) {
+                    ++filledEntries;
+                }
+            }
+        }
+
+        return filledEntries / Cluster::kEntriesPerCluster;
+    }
+} // namespace oranj

@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,36 +20,56 @@
 
 #include "types.h"
 
-#include "wdl.h"
 #include "util/range.h"
 
-namespace oranj
-{
-	namespace opts
-	{
-		constexpr u32 DefaultThreadCount = 1;
-		constexpr auto ThreadCountRange = util::Range<u32>{1,  2048};
+namespace oranj {
+    namespace opts {
+        constexpr u32 kDefaultThreadCount = 1;
+        constexpr auto kThreadCountRange = util::Range<i32>{1, 2048};
 
-		constexpr i32 DefaultNormalizedContempt = 0;
+        constexpr u32 kDefaultMoveOverheadMs = 10;
+        constexpr auto kMoveOverheadRange = util::Range<i32>{0, 50000};
 
-		struct GlobalOptions
-		{
-			u32 threads{DefaultThreadCount};
+        constexpr auto kSoftNodeHardLimitMultiplierRange = util::Range<i32>{1, 5000};
 
-			bool chess960{false};
-			bool showWdl{true};
-			bool showCurrMove{false};
+        constexpr auto kMultiPvRange = util::Range<i32>{1, 256};
 
-			bool softNodes{false};
-			i32 softNodeHardLimitMultiplier{1678};
+        constexpr i32 kDefaultEvalSharpness = 115;
+        constexpr auto kEvalSharpnessRange = util::Range<i32>{100, 120};
 
-			bool enableWeirdTcs{false};
+        constexpr i32 kDefaultContempt = 0;
+        constexpr auto kContemptRange = util::Range<i32>{-1000, 1000};
 
-			i32 contempt{wdl::unnormalizeScoreMaterial58(DefaultNormalizedContempt)};
-		};
+        struct GlobalOptions {
+            i32 threads{kDefaultThreadCount};
 
-		auto mutableOpts() -> GlobalOptions &;
-	}
+            bool chess960{false};
+            bool showWdl{true};
+            bool showCurrMove{false};
 
-	extern const opts::GlobalOptions &g_opts;
-}
+            i32 moveOverhead{kDefaultMoveOverheadMs};
+
+            i32 evalSharpness{kDefaultEvalSharpness};
+
+            i32 multiPv{1};
+
+            bool softNodes{false};
+            i32 softNodeHardLimitMultiplier{1678};
+
+            bool enableWeirdTcs{false};
+
+            bool minimal{false};
+
+            bool syzygyEnabled{false};
+            i32 syzygyProbeDepth{1};
+            i32 syzygyProbeLimit{7};
+            bool syzygyProbeRootOnly{false};
+
+            i32 contempt{kDefaultContempt};
+        };
+
+        GlobalOptions& mutableOpts();
+    } // namespace opts
+
+    extern const opts::GlobalOptions& g_opts;
+} // namespace oranj

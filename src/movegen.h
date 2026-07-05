@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,20 +21,18 @@
 #include "types.h"
 
 #include "move.h"
-#include "position/position.h"
+#include "position.h"
 
-namespace oranj
-{
-	struct ScoredMove
-	{
-		Move move;
-		i32 score;
-	};
+namespace oranj {
+    struct ScoredMove {
+        Move move;
+        i32 score;
+    };
 
-	using ScoredMoveList = StaticVector<ScoredMove, DefaultMoveListCapacity>;
+    using ScoredMoveList = StaticVector<ScoredMove, kDefaultMoveListCapacity>;
 
-	auto generateNoisy(ScoredMoveList &noisy, const Position &pos) -> void;
-	auto generateQuiet(ScoredMoveList &quiet, const Position &pos) -> void;
+    void generateNoisy(ScoredMoveList& noisy, const Position& pos);
+    void generateQuiet(ScoredMoveList& quiet, const Position& pos);
 
-	auto generateAll(ScoredMoveList &dst, const Position &pos) -> void;
-}
+    void generateAll(ScoredMoveList& dst, const Position& pos);
+} // namespace oranj

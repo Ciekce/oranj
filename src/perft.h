@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,11 +20,9 @@
 
 #include "types.h"
 
-#include "core.h"
-#include "position/position.h"
+#include "position.h"
 
-namespace oranj
-{
-	auto perft(Position &pos, i32 depth) -> void;
-	auto splitPerft(Position &pos, i32 depth) -> void;
-}
+namespace oranj {
+    void perft(const Position& pos, i32 depth);
+    void splitPerft(const Position& pos, i32 depth);
+} // namespace oranj

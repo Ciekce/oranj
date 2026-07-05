@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,20 +24,17 @@
 
 #include "move.h"
 
-namespace oranj::cuckoo
-{
-	constexpr auto h1(u64 key)
-	{
-		return static_cast<usize>(key & 0x1FFF);
-	}
+namespace oranj::cuckoo {
+    [[nodiscard]] constexpr usize h1(u64 key) {
+        return static_cast<usize>(key & 0x1FFF);
+    }
 
-	constexpr auto h2(u64 key)
-	{
-		return static_cast<usize>((key >> 16) & 0x1FFF);
-	}
+    [[nodiscard]] constexpr usize h2(u64 key) {
+        return static_cast<usize>((key >> 16) & 0x1FFF);
+    }
 
-	extern std::array<u64, 8192> keys;
-	extern std::array<Move, 8192> moves;
+    extern std::array<u64, 8192> keys;
+    extern std::array<Move, 8192> moves;
 
-	void init();
-}
+    void init();
+} // namespace oranj::cuckoo

@@ -1,6 +1,6 @@
 /*
  * oranj, a UCI shatranj engine
- * Copyright (C) 2025 Ciekce
+ * Copyright (C) 2026 Ciekce
  *
  * oranj is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,77 +21,108 @@
 #include "../types.h"
 
 #include <array>
-#include <cstddef>
-#include <algorithm>
 #include <cassert>
 
-namespace oranj
-{
-	template <typename T, usize Capacity>
-	class StaticVector
-	{
-	public:
-		StaticVector() = default;
-		~StaticVector() = default;
+namespace oranj {
+    template <typename T, usize kCapacity, bool kPadded = false>
+    class StaticVector {
+    public:
+        StaticVector() = default;
 
-		StaticVector(const StaticVector<T, Capacity> &other)
-		{
-			*this = other;
-		}
+        StaticVector(const StaticVector& other) {
+            *this = other;
+        }
 
-		inline auto push(const T &elem)
-		{
-			assert(m_size < Capacity);
-			m_data[m_size++] = elem;
-		}
+        inline void push(const T& elem) {
+            assert(m_size < kCapacity);
+            m_data[m_size++] = elem;
+        }
 
-		inline auto push(T &&elem)
-		{
-			assert(m_size < Capacity);
-			m_data[m_size++] = std::move(elem);
-		}
+        inline void push(T&& elem) {
+            assert(m_size < kCapacity);
+            m_data[m_size++] = std::move(elem);
+        }
 
-		inline auto clear() { m_size = 0; }
+        inline void pushIf(const T& elem, bool cond) {
+            assert(m_size < kCapacity);
+            m_data[m_size] = elem;
+            m_size += cond;
+        }
 
-		inline auto fill(const T &v) { m_data.fill(v); }
+        inline bool tryPush(const T& elem) {
+            const bool hasCapacity = m_size < kCapacity;
 
-		[[nodiscard]] inline auto size() const { return m_size; }
+            if constexpr (kPadded) {
+                m_data[m_size] = elem;
+                m_size += hasCapacity;
+            } else if (hasCapacity) {
+                push(elem);
+            }
 
-		[[nodiscard]] inline auto empty() const { return m_size == 0; }
+            return hasCapacity;
+        }
 
-		[[nodiscard]] inline auto operator[](usize i) const -> const auto &
-		{
-			assert(i < m_size);
-			return m_data[i];
-		}
+        inline T pop() {
+            assert(m_size > 0);
+            return std::move(m_data[--m_size]);
+        }
 
-		[[nodiscard]] inline auto begin() { return m_data.begin(); }
-		[[nodiscard]] inline auto end() { return m_data.begin() + static_cast<std::ptrdiff_t>(m_size); }
+        inline void clear() {
+            m_size = 0;
+        }
 
-		[[nodiscard]] inline auto operator[](usize i) -> auto &
-		{
-			assert(i < m_size);
-			return m_data[i];
-		}
+        inline void fill(const T& v) {
+            m_data.fill(v);
+        }
 
-		[[nodiscard]] inline auto begin() const { return m_data.begin(); }
-		[[nodiscard]] inline auto end() const { return m_data.begin() + static_cast<std::ptrdiff_t>(m_size); }
+        [[nodiscard]] inline usize size() const {
+            return m_size;
+        }
 
-		inline auto resize(usize size)
-		{
-			assert(size <= Capacity);
-			m_size = size;
-		}
+        [[nodiscard]] inline bool empty() const {
+            return m_size == 0;
+        }
 
-		inline auto operator=(const StaticVector<T, Capacity> &other) -> auto &
-		{
-			std::copy(other.begin(), other.end(), begin());
-			m_size = other.m_size;
-			return *this;
-		}
+        [[nodiscard]] inline const T& operator[](usize i) const {
+            assert(i < m_size);
+            return m_data[i];
+        }
 
-	private:
-		std::array<T, Capacity> m_data{};
-		usize m_size{0};
-	};
-}
+        [[nodiscard]] inline auto begin() {
+            return m_data.begin();
+        }
+
+        [[nodiscard]] inline auto end() {
+            return m_data.begin() + static_cast<std::ptrdiff_t>(m_size);
+        }
+
+        [[nodiscard]] inline T& operator[](usize i) {
+            assert(i < m_size);
+            return m_data[i];
+        }
+
+        [[nodiscard]] inline auto begin() const {
+            return m_data.begin();
+        }
+
+        [[nodiscard]] inline auto end() const {
+            return m_data.begin() + static_cast<std::ptrdiff_t>(m_size);
+        }
+
+        inline void resize(usize size) {
+            assert(size <= kCapacity);
+            m_size = size;
+        }
+
+        StaticVector& operator=(const StaticVector& other) = default;
+
+        template <typename F>
+        inline void unsafeWrite(F f) {
+            m_size += f(&m_data[m_size]);
+        }
+
+    private:
+        std::array<T, kCapacity + kPadded> m_data{};
+        usize m_size{0};
+    };
+} // namespace oranj
