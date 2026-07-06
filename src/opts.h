@@ -34,7 +34,7 @@ namespace oranj {
 
         constexpr auto kMultiPvRange = util::Range<i32>{1, 256};
 
-        constexpr i32 kDefaultEvalSharpness = 115;
+        constexpr i32 kDefaultEvalSharpness = 100;
         constexpr auto kEvalSharpnessRange = util::Range<i32>{100, 120};
 
         constexpr i32 kDefaultContempt = 0;

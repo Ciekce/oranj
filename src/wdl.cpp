@@ -52,6 +52,7 @@ namespace oranj::wdl {
 
     template <bool kSharpen>
     Score normalizeScore(Score score, i32 material) {
+        /*
         // don't normalise wins/losses, or zeroes that are pointless to normalise
         if (score == 0 || isDecisive(score)) {
             return score;
@@ -76,14 +77,23 @@ namespace oranj::wdl {
         }
 
         return static_cast<Score>(std::round(100.0 * normalized));
+        */
+
+        OJ_UNUSED(material);
+        return score * 100 / 250;
     }
 
     template Score normalizeScore<false>(Score, i32);
     template Score normalizeScore<true>(Score, i32);
 
     Score unnormalizeScore(Score score, i32 material) {
+        /*
         const auto [a, b] = wdlParams(material);
         const auto unnormalized = static_cast<f64>(score) * a / 100.0;
         return static_cast<Score>(std::round(unnormalized));
+        */
+
+        OJ_UNUSED(material);
+        return score * 250 / 100;
     }
 } // namespace oranj::wdl
