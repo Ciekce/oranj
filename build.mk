@@ -11,7 +11,7 @@ USE_LIBNUMA = off
 # https://stackoverflow.com/a/1825832
 rwildcard = $(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
 
-SOURCES_3RDPARTY := 3rdparty/fmt/src/format.cc 3rdparty/pyrrhic/tbprobe.cpp 3rdparty/zstd/zstddeclib.c
+SOURCES_3RDPARTY := 3rdparty/fmt/src/format.cc 3rdparty/zstd/zstddeclib.c
 SOURCES_PERMUTE := preprocess/permute.cpp 3rdparty/fmt/src/format.cc
 
 HEADERS := $(call rwildcard,src,*.h)

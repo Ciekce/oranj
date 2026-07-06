@@ -46,9 +46,6 @@ namespace oranj::search {
         usize nodes{};
     };
 
-    constexpr auto kSyzygyProbeDepthRange = util::Range<i32>{1, kMaxDepth};
-    constexpr auto kSyzygyProbeLimitRange = util::Range<i32>{0, 7};
-
     struct SetupInfo {
         Position rootPos{};
 

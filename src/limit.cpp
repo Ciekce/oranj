@@ -54,7 +54,7 @@ namespace oranj::limit {
             m_prevBestMove = bestMove;
         }
 
-        // try to resolve >tb scores that aren't full mates yet
+        // try to resolve win scores that aren't full mates yet
         if (isWin(pvMove.score) && score >= kScoreMate - kMaxDepth) {
             m_scale = 0.15;
             return;

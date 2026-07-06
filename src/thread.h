@@ -37,7 +37,6 @@ namespace oranj::search {
         i32 seldepth{};
 
         std::atomic<usize> nodes{};
-        std::atomic<usize> tbhits{};
 
         SearchData() = default;
 
@@ -58,21 +57,11 @@ namespace oranj::search {
             nodes.store(nodes.load(std::memory_order::relaxed) + 1, std::memory_order::relaxed);
         }
 
-        [[nodiscard]] inline usize loadTbHits() const {
-            return tbhits.load(std::memory_order::relaxed);
-        }
-
-        inline void incTbHits() {
-            // see above
-            tbhits.store(tbhits.load(std::memory_order::relaxed) + 1, std::memory_order::relaxed);
-        }
-
         SearchData& operator=(const SearchData& other) {
             rootDepth = other.rootDepth;
             seldepth = other.seldepth;
 
             nodes.store(other.nodes.load());
-            tbhits.store(other.tbhits.load());
 
             return *this;
         }
