@@ -43,7 +43,6 @@ namespace oranj {
         struct GlobalOptions {
             i32 threads{kDefaultThreadCount};
 
-            bool chess960{false};
             bool showWdl{true};
             bool showCurrMove{false};
 
@@ -56,14 +55,7 @@ namespace oranj {
             bool softNodes{false};
             i32 softNodeHardLimitMultiplier{1678};
 
-            bool enableWeirdTcs{false};
-
             bool minimal{false};
-
-            bool syzygyEnabled{false};
-            i32 syzygyProbeDepth{1};
-            i32 syzygyProbeLimit{7};
-            bool syzygyProbeRootOnly{false};
 
             i32 contempt{kDefaultContempt};
         };

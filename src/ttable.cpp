@@ -45,21 +45,13 @@ namespace oranj {
 
         inline Score scoreFromTt(Score score, i32 ply, i32 halfmove) {
             if (isLoss(score)) {
-                if (score < -kScoreTbWin && kScoreMate + score > 100 - halfmove) {
-                    return -kScoreWin + 1;
-                }
-
-                if (kScoreTbWin + score > 100 - halfmove) {
+                if (kScoreMate + score > 140 - halfmove) {
                     return -kScoreWin + 1;
                 }
 
                 return score + ply;
             } else if (isWin(score)) {
-                if (score > kScoreTbWin && kScoreMate - score > 100 - halfmove) {
-                    return kScoreWin - 1;
-                }
-
-                if (kScoreTbWin - score > 100 - halfmove) {
+                if (kScoreMate - score > 140 - halfmove) {
                     return kScoreWin - 1;
                 }
 

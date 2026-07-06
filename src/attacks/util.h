@@ -95,8 +95,6 @@ namespace oranj::attacks {
 
     constexpr auto kEmptyBoardRooks =
         generateEmptyBoardAttacks<offsets::kUp, offsets::kDown, offsets::kLeft, offsets::kRight>();
-    constexpr auto kEmptyBoardBishops =
-        generateEmptyBoardAttacks<offsets::kUpLeft, offsets::kUpRight, offsets::kDownLeft, offsets::kDownRight>();
 
     constexpr auto kDiagonals = generateEmptyBoardAttacks<offsets::kUpRight, offsets::kDownLeft>();
     constexpr auto kAntiDiagonals = generateEmptyBoardAttacks<offsets::kUpLeft, offsets::kDownRight>();
@@ -114,12 +112,5 @@ namespace oranj::attacks {
 
     [[nodiscard]] constexpr Bitboard genRookAttacks(Square src, Bitboard occ) {
         return genAllSlidingAttacks<offsets::kUp, offsets::kDown, offsets::kLeft, offsets::kRight>(src, occ);
-    }
-
-    [[nodiscard]] constexpr Bitboard genBishopAttacks(Square src, Bitboard occ) {
-        return genAllSlidingAttacks<offsets::kUpLeft, offsets::kUpRight, offsets::kDownLeft, offsets::kDownRight>(
-            src,
-            occ
-        );
     }
 } // namespace oranj::attacks

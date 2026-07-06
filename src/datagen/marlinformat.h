@@ -40,11 +40,7 @@ namespace oranj::datagen {
             [[maybe_unused]] u8 extra;
 
             [[nodiscard]] static PackedBoard pack(const Position& pos, i16 score) {
-                static constexpr u8 kUnmovedRook = 6;
-
                 PackedBoard board{};
-
-                const auto castlingRooks = pos.castlingRooks();
 
                 const auto occ = pos.occ();
                 board.occupancy = occ;
@@ -53,15 +49,7 @@ namespace oranj::datagen {
                 for (const auto sq : occ) {
                     const auto piece = pos.pieceOn(sq);
 
-                    auto ptId = piece.type().raw();
-
-                    if (piece.type() == PieceTypes::kRook
-                        && (sq == castlingRooks.black().kingside || sq == castlingRooks.black().queenside
-                            || sq == castlingRooks.white().kingside || sq == castlingRooks.white().queenside))
-                    {
-                        ptId = kUnmovedRook;
-                    }
-
+                    const u8 ptId = piece.type().raw();
                     const u8 colorId = piece.color() == Colors::kBlack ? (1 << 3) : 0;
 
                     board.pieces[i++] = ptId | colorId;
@@ -69,12 +57,7 @@ namespace oranj::datagen {
 
                 const u8 stm = pos.stm() == Colors::kBlack ? (1 << 7) : 0;
 
-                const Square relativeEpSquare =
-                    pos.enPassant() == Squares::kNone
-                        ? Squares::kNone
-                        : pos.enPassant().withRank(pos.stm() == Colors::kBlack ? kRank3 : kRank6);
-
-                board.stmEpSquare = stm | relativeEpSquare.raw();
+                board.stmEpSquare = stm;
                 board.halfmoveClock = pos.halfmove();
                 board.fullmoveNumber = pos.fullmove();
                 board.eval = score;

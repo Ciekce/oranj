@@ -26,12 +26,5 @@
 #include <string_view>
 
 namespace oranj::datagen {
-    i32 run(
-        const std::function<void()>& printUsage,
-        std::string_view format,
-        bool dfrc,
-        std::string_view output,
-        i32 threads,
-        std::optional<std::string_view> tbPath
-    );
+    i32 run(const std::function<void()>& printUsage, std::string_view format, std::string_view output, i32 threads);
 }

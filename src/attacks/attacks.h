@@ -51,6 +51,40 @@ namespace oranj::attacks {
     constexpr auto kBlackPawnAttacks = generatePawnAttacks(Colors::kBlack);
     constexpr auto kWhitePawnAttacks = generatePawnAttacks(Colors::kWhite);
 
+    constexpr auto kAlfilAttacks = [] {
+        std::array<Bitboard, Squares::kCount> dst{};
+
+        for (usize i = 0; i < dst.size(); ++i) {
+            const auto bit = Bitboard::fromSquare(Square::fromRaw(i));
+
+            auto& attacks = dst[i];
+
+            attacks |= bit.shiftUpLeft().shiftUpLeft();
+            attacks |= bit.shiftUpRight().shiftUpRight();
+            attacks |= bit.shiftDownLeft().shiftDownLeft();
+            attacks |= bit.shiftDownRight().shiftDownRight();
+        }
+
+        return dst;
+    }();
+
+    constexpr auto kFerzAttacks = [] {
+        std::array<Bitboard, Squares::kCount> dst{};
+
+        for (usize i = 0; i < dst.size(); ++i) {
+            const auto bit = Bitboard::fromSquare(Square::fromRaw(i));
+
+            auto& attacks = dst[i];
+
+            attacks |= bit.shiftUpLeft();
+            attacks |= bit.shiftUpRight();
+            attacks |= bit.shiftDownLeft();
+            attacks |= bit.shiftDownRight();
+        }
+
+        return dst;
+    }();
+
     constexpr auto kKnightAttacks = [] {
         std::array<Bitboard, Squares::kCount> dst{};
 
@@ -101,15 +135,16 @@ namespace oranj::attacks {
         }
     }
 
-    [[nodiscard]] constexpr Bitboard getKnightAttacks(Square src) {
-        return kKnightAttacks[src.idx()];
+    [[nodiscard]] constexpr Bitboard getAlfilAttacks(Square src) {
+        return kAlfilAttacks[src.idx()];
     }
 
-    [[nodiscard]] constexpr Bitboard getBishopAttacks(Square src, Bitboard occ) {
-        if (std::is_constant_evaluated()) {
-            return occ.empty() ? kEmptyBoardBishops[src.idx()] : genBishopAttacks(src, occ);
-        }
-        return lookup::getBishopAttacks(src, occ);
+    [[nodiscard]] constexpr Bitboard getFerzAttacks(Square src) {
+        return kFerzAttacks[src.idx()];
+    }
+
+    [[nodiscard]] constexpr Bitboard getKnightAttacks(Square src) {
+        return kKnightAttacks[src.idx()];
     }
 
     [[nodiscard]] constexpr Bitboard getKingAttacks(Square src) {
@@ -123,24 +158,20 @@ namespace oranj::attacks {
         return lookup::getRookAttacks(src, occ);
     }
 
-    [[nodiscard]] constexpr Bitboard getQueenAttacks(Square src, Bitboard occ) {
-        return getRookAttacks(src, occ) | getBishopAttacks(src, occ);
-    }
-
     [[nodiscard]] constexpr Bitboard getAttacks(Piece piece, Square src, Bitboard occ = Bitboard{}) {
         assert(piece != Pieces::kNone);
 
         switch (piece.type().raw()) {
             case PieceTypes::kPawn.raw():
                 return getPawnAttacks(src, piece.color());
+            case PieceTypes::kAlfil.raw():
+                return getAlfilAttacks(src);
+            case PieceTypes::kFerz.raw():
+                return getFerzAttacks(src);
             case PieceTypes::kKnight.raw():
                 return getKnightAttacks(src);
-            case PieceTypes::kBishop.raw():
-                return getBishopAttacks(src, occ);
             case PieceTypes::kRook.raw():
                 return getRookAttacks(src, occ);
-            case PieceTypes::kQueen.raw():
-                return getQueenAttacks(src, occ);
             case PieceTypes::kKing.raw():
                 return getKingAttacks(src);
             default:
@@ -154,14 +185,14 @@ namespace oranj::attacks {
         switch (piece.type().raw()) {
             case PieceTypes::kPawn.raw():
                 return getPawnAttacks(src, piece.color());
+            case PieceTypes::kAlfil.raw():
+                return getAlfilAttacks(src);
+            case PieceTypes::kFerz.raw():
+                return getFerzAttacks(src);
             case PieceTypes::kKnight.raw():
                 return getKnightAttacks(src);
-            case PieceTypes::kBishop.raw():
-                return getBishopAttacks(src, Bitboard{});
             case PieceTypes::kRook.raw():
                 return getRookAttacks(src, Bitboard{});
-            case PieceTypes::kQueen.raw():
-                return getQueenAttacks(src, Bitboard{});
             case PieceTypes::kKing.raw():
                 return getKingAttacks(src);
             default:

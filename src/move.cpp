@@ -28,19 +28,10 @@ fmt::format_context::iterator fmt::formatter<oranj::Move>::format(oranj::Move va
         return format_to(ctx.out(), "????");
     }
 
-    format_to(ctx.out(), "{}", value.fromSq());
+    format_to(ctx.out(), "{}{}", value.fromSq(), value.toSq());
 
-    const auto type = value.type();
-
-    if (type != MoveType::kCastling || g_opts.chess960) {
-        format_to(ctx.out(), "{}", value.toSq());
-        if (type == MoveType::kPromotion) {
-            format_to(ctx.out(), "{}", value.promo());
-        }
-    } else {
-        const auto dst =
-            value.fromSqFile() < value.toSqFile() ? value.fromSq().withFile(kFileG) : value.fromSq().withFile(kFileC);
-        format_to(ctx.out(), "{}", dst);
+    if (value.isPromo()) {
+        format_to(ctx.out(), "q");
     }
 
     return ctx.out();

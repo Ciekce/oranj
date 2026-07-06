@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <unordered_map>
 
-#include "../3rdparty/pyrrhic/tbprobe.h"
 #include "opts.h"
 #include "see.h"
 #include "uci/uci.h"
@@ -108,7 +107,6 @@ namespace oranj::search {
         m_resetBarrier.arriveAndWait();
 
         m_infinite = infinite;
-        m_probeWdl = !g_opts.syzygyProbeRootOnly;
 
         m_rootMoves.clear();
 
@@ -129,26 +127,10 @@ namespace oranj::search {
 
         assert(!m_rootMoves.empty());
 
-        rankTbMoves(pos, keyHistory);
-
         m_multiPv = std::min<u32>(g_opts.multiPv, m_rootMoves.size());
 
-        if (g_opts.multiPv == 1) {
-            u32 rootMoveCount{};
-
-            for (const auto& rootMove : m_rootMoves) {
-                if (rootMove.tbRank < m_rootMoves[0].tbRank) {
-                    break;
-                }
-                ++rootMoveCount;
-            }
-
-            assert(rootMoveCount > 0);
-
-            // Cap search time if we have one unfiltered legal move, or if we're in a TB draw at root
-            if (rootMoveCount == 1 || m_rootMoves[0].tbWdl == GameResult::kDraw) {
-                m_limiter->stopEarly();
-            }
+        if (g_opts.multiPv == 1 && m_rootMoves.size() == 1) {
+            m_limiter->stopEarly();
         }
 
         const auto contempt = wdl::unnormalizeScore(g_opts.contempt, pos.classicalMaterial());
@@ -223,8 +205,6 @@ namespace oranj::search {
         if (m_rootMoves.empty()) {
             return {-kScoreMate, -kScoreMate};
         }
-
-        rankTbMoves(thread.rootPos, thread.keyHistory);
 
         m_multiPv = 1;
         m_infinite = false;
@@ -309,52 +289,6 @@ namespace oranj::search {
         m_rootMoveCount = m_rootMoves.size();
     }
 
-    void Searcher::rankTbMoves(const Position& pos, std::span<const u64> keys) {
-        if (!g_opts.syzygyEnabled
-            || pos.occ().popcount() > std::min(g_opts.syzygyProbeLimit, static_cast<i32>(TB_LARGEST)))
-        {
-            return;
-        }
-
-        const auto [wdl, dtzSucceeded] = tb::probeRoot(pos, keys, m_rootMoves);
-
-        if (wdl != GameResult::kNone) {
-            m_tbRoot = true;
-        }
-
-        if (dtzSucceeded || wdl != GameResult::kWin) {
-            m_probeWdl = false;
-        }
-
-        if (g_opts.multiPv > 1) {
-            return;
-        }
-
-        m_rootMoveCount = 0;
-
-        for (const auto& rootMove : m_rootMoves) {
-            if (rootMove.tbRank < m_rootMoves[0].tbRank) {
-                break;
-            }
-
-            ++m_rootMoveCount;
-        }
-
-        if (!m_silent) {
-            print("info string Filtered root moves:");
-
-            for (const auto& rootMove : m_rootMoves) {
-                if (rootMove.tbRank < m_rootMoves[0].tbRank) {
-                    break;
-                }
-
-                print(" {}", rootMove.move());
-            }
-
-            println();
-        }
-    }
-
     void Searcher::stopThreads() {
         m_quit.store(true, std::memory_order::release);
 
@@ -434,28 +368,7 @@ namespace oranj::search {
                 move.previousScore = move.score;
             }
 
-            thread.pvStart = 0;
-            thread.pvEnd = 0;
-
             for (thread.pvIdx = 0; thread.pvIdx < m_multiPv; ++thread.pvIdx) {
-                if (thread.pvIdx == thread.pvEnd) {
-                    // We've reached the end of this block of root moves (or this is the first PV).
-                    // Find the end of the next block by scanning to the next root move with a lower TB rank,
-                    //  or the end of the list.
-                    // When multipv == 1, this has the effect of filtering out all suboptimal root moves from being
-                    //  searched.
-
-                    thread.pvStart = thread.pvIdx;
-
-                    const auto& firstRootMove = thread.rootMoves[thread.pvIdx];
-
-                    for (thread.pvEnd = thread.pvIdx + 1; thread.pvEnd < thread.rootMoves.size(); ++thread.pvEnd) {
-                        if (thread.rootMoves[thread.pvEnd].tbRank < firstRootMove.tbRank) {
-                            break;
-                        }
-                    }
-                }
-
                 searchData.seldepth = 0;
 
                 const auto& rootMove = thread.rootMoves[thread.pvIdx];
@@ -697,7 +610,7 @@ namespace oranj::search {
                     );
                 }
 
-                if (pos.halfmove() < 90) {
+                if (pos.halfmove() < 130) {
                     return ttEntry.score;
                 }
             }
@@ -712,59 +625,6 @@ namespace oranj::search {
         curr.moveCount = 0;
 
         const bool ttMoveNoisy = ttMove && pos.isNoisy(ttMove);
-
-        const auto pieceCount = pos.occ().popcount();
-
-        auto syzygyMin = -kScoreMate;
-        auto syzygyMax = kScoreMate;
-
-        const auto syzygyPieceLimit = std::min(g_opts.syzygyProbeLimit, static_cast<i32>(TB_LARGEST));
-
-        // Probe the Syzygy tablebases for a WDL result
-        // if there are few enough pieces left on the board
-        if (!kRootNode && !curr.excluded && g_opts.syzygyEnabled && m_probeWdl && pieceCount <= syzygyPieceLimit
-            && (pieceCount < syzygyPieceLimit || depth >= g_opts.syzygyProbeDepth) && pos.halfmove() == 0
-            && pos.castlingRooks() == CastlingRooks{})
-        {
-            const auto result = tb::probeWdl(pos);
-
-            if (result != GameResult::kNone) {
-                thread.search.incTbHits();
-
-                Score score;
-                TtFlag flag;
-
-                if (result == GameResult::kWin) {
-                    score = kScoreTbWin - ply;
-                    flag = TtFlag::kLowerBound;
-                } else if (result == GameResult::kLoss) {
-                    score = -kScoreTbWin + ply;
-                    flag = TtFlag::kUpperBound;
-                } else {
-                    score = draw;
-                    flag = TtFlag::kExact;
-                }
-
-                if (flag == TtFlag::kExact                             //
-                    || (flag == TtFlag::kUpperBound && score <= alpha) //
-                    || (flag == TtFlag::kLowerBound && score >= beta))
-                {
-                    m_ttable.put(pos.key(), score, kScoreNone, kNullMove, depth, ply, flag, curr.ttpv);
-                    return score;
-                }
-
-                if constexpr (kPvNode) {
-                    if (flag == TtFlag::kUpperBound) {
-                        syzygyMax = score;
-                    } else { // lower bound (win)
-                        if (score > alpha) {
-                            alpha = score;
-                        }
-                        syzygyMin = score;
-                    }
-                }
-            }
-        }
 
         if (depth >= 3 && !curr.excluded && (kPvNode || cutnode) && (!ttMove || ttEntry.depth + 3 < depth)) {
             --depth;
@@ -1428,8 +1288,6 @@ namespace oranj::search {
             bestScore = (bestScore * depth + beta) / (depth + 1);
         }
 
-        bestScore = std::clamp(bestScore, syzygyMin, syzygyMax);
-
         if (!curr.excluded) {
             if (!inCheck && (bestMove.isNull() || !pos.isNoisy(bestMove))
                 && (ttFlag == TtFlag::kExact                                          //
@@ -1680,19 +1538,14 @@ namespace oranj::search {
 
         print("depth {} seldepth {} time {} nodes {} nps {} score ", move.searchedDepth, move.seldepth, ms, nodes, nps);
 
-        if (!move.tbRange.contains(score)) {
-            score = move.tbRange.clamp(score);
-
-            upperbound = false;
-            lowerbound = false;
-        } else if (std::abs(score) <= 2) { // draw score
+        if (std::abs(score) <= 2) { // draw score
             score = 0;
         }
 
         const auto material = thread.rootPos.classicalMaterial();
 
         // mates
-        if (std::abs(score) > kScoreTbWin) {
+        if (isWin(score)) {
             if (score > 0) {
                 print("mate {}", (kScoreMate - score + 1) / 2);
             } else {
@@ -1727,20 +1580,6 @@ namespace oranj::search {
         }
 
         print(" hashfull {}", m_ttable.full());
-
-        if (g_opts.syzygyEnabled) {
-            usize tbhits = 0;
-
-            if (m_tbRoot) {
-                ++tbhits;
-            }
-
-            for (const auto& worker : m_threadData) {
-                tbhits += worker->search.loadTbHits();
-            }
-
-            print(" tbhits {}", tbhits);
-        }
 
         print(" pv");
 

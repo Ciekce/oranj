@@ -61,10 +61,10 @@ namespace oranj::tunable {
 
         const std::array values = {
             seeValuePawn(),
+            seeValueAlfil(),
+            seeValueFerz(),
             seeValueKnight(),
-            seeValueBishop(),
             seeValueRook(),
-            seeValueQueen(),
         };
 
         for (usize i = 0; i < values.size(); ++i) {
@@ -74,10 +74,10 @@ namespace oranj::tunable {
 
         g_seeOrderedPts = {
             PieceTypes::kPawn,
+            PieceTypes::kAlfil,
+            PieceTypes::kFerz,
             PieceTypes::kKnight,
-            PieceTypes::kBishop,
             PieceTypes::kRook,
-            PieceTypes::kQueen,
             PieceTypes::kKing,
         };
 

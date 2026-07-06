@@ -79,7 +79,7 @@ namespace oranj::search {
     }
 
     bool ThreadData::isLegalRootMove(Move move) const {
-        for (u32 idx = pvIdx; idx < pvEnd; ++idx) {
+        for (u32 idx = pvIdx; idx < rootMoves.size(); ++idx) {
             const auto& rootMove = rootMoves[idx];
             if (move == rootMove.move()) {
                 return true;
@@ -90,18 +90,14 @@ namespace oranj::search {
     }
 
     void ThreadData::sortSearchedRootMoves() {
-        std::stable_sort(
-            rootMoves.begin() + pvStart,
-            rootMoves.begin() + pvIdx + 1,
-            [](const RootMove& a, const RootMove& b) { return a.score > b.score; }
-        );
+        std::stable_sort(rootMoves.begin(), rootMoves.begin() + pvIdx + 1, [](const RootMove& a, const RootMove& b) {
+            return a.score > b.score;
+        });
     }
 
     void ThreadData::sortRemainingRootMoves() {
-        std::stable_sort(
-            rootMoves.begin() + pvIdx,
-            rootMoves.begin() + pvEnd,
-            [](const RootMove& a, const RootMove& b) { return a.score > b.score; }
-        );
+        std::stable_sort(rootMoves.begin() + pvIdx, rootMoves.end(), [](const RootMove& a, const RootMove& b) {
+            return a.score > b.score;
+        });
     }
 } // namespace oranj::search

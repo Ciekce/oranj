@@ -35,75 +35,6 @@
 #include "util/split.h"
 
 namespace oranj {
-    namespace {
-        std::array<PieceType, 8> scharnaglToBackrank(u32 n) {
-            // https://en.wikipedia.org/wiki/Fischer_random_chess_numbering_scheme#Direct_derivation
-
-            // these are stored with the second knight moved left by an empty square,
-            // because the first knight fills a square before the second knight is placed
-            static constexpr std::array kN5n = {
-                std::pair{0, 0},
-                std::pair{0, 1},
-                std::pair{0, 2},
-                std::pair{0, 3},
-                std::pair{1, 1},
-                std::pair{1, 2},
-                std::pair{1, 3},
-                std::pair{2, 2},
-                std::pair{2, 3},
-                std::pair{3, 3},
-            };
-
-            assert(n < 960);
-
-            std::array<PieceType, 8> dst{};
-            // no need to fill with empty pieces, because pawns are impossible
-
-            const auto placeInNthFree = [&dst](u32 n, PieceType pt) {
-                for (i32 free = 0, i = 0; i < 8; ++i) {
-                    if (dst[i] == PieceTypes::kPawn && free++ == n) {
-                        dst[i] = pt;
-                        break;
-                    }
-                }
-            };
-
-            const auto placeInFirstFree = [&dst](PieceType pt) {
-                for (i32 i = 0; i < 8; ++i) {
-                    if (dst[i] == PieceTypes::kPawn) {
-                        dst[i] = pt;
-                        break;
-                    }
-                }
-            };
-
-            const auto n2 = n / 4;
-            const auto b1 = n % 4;
-
-            const auto n3 = n2 / 4;
-            const auto b2 = n2 % 4;
-
-            const auto n4 = n3 / 6;
-            const auto q = n3 % 6;
-
-            dst[b1 * 2 + 1] = PieceTypes::kBishop;
-            dst[b2 * 2] = PieceTypes::kBishop;
-
-            placeInNthFree(q, PieceTypes::kQueen);
-
-            const auto [knight1, knight2] = kN5n[n4];
-
-            placeInNthFree(knight1, PieceTypes::kKnight);
-            placeInNthFree(knight2, PieceTypes::kKnight);
-
-            placeInFirstFree(PieceTypes::kRook);
-            placeInFirstFree(PieceTypes::kKing);
-            placeInFirstFree(PieceTypes::kRook);
-
-            return dst;
-        }
-    } // namespace
-
     using NnueObserver = eval::BoardObserver;
 
     template <typename Observer>
@@ -113,15 +44,7 @@ namespace oranj {
         newPos.m_stm = m_stm.flip();
         newPos.m_keys.flipStm();
 
-        if (newPos.m_enPassant != Squares::kNone) {
-            newPos.m_keys.flipEp(newPos.m_enPassant);
-            newPos.m_enPassant = Squares::kNone;
-        }
-
-        const auto stm = newPos.nstm();
-        const auto nstm = stm.flip();
-
-        if (stm == Colors::kBlack) {
+        if (m_stm == Colors::kBlack) {
             ++newPos.m_fullmove;
         }
 
@@ -134,43 +57,22 @@ namespace oranj {
             return newPos;
         }
 
-        const auto moveType = move.type();
-
         const auto moveSrc = move.fromSq();
         const auto moveDst = move.toSq();
 
         const auto moving = pieceOn(moveSrc);
-        const auto movingType = moving.type();
 
-        auto captured = Pieces::kNone;
+        Piece captured;
 
-        switch (moveType) {
-            case MoveType::kStandard:
-                captured = newPos.movePiece<true, Observer>(moving, moveSrc, moveDst, observer);
-                break;
-            case MoveType::kPromotion:
-                captured = newPos.promotePawn<true, Observer>(moving, moveSrc, moveDst, move.promo(), observer);
-                break;
-            case MoveType::kCastling:
-                newPos.castle<true, Observer>(moving, moveSrc, moveDst, observer);
-                break;
-            case MoveType::kEnPassant:
-                captured = newPos.enPassant<true, Observer>(moving, moveSrc, moveDst, observer);
-                break;
+        if (move.isPromo()) {
+            captured = newPos.promotePawn<true, Observer>(moving, moveSrc, moveDst, observer);
+        } else {
+            captured = newPos.movePiece<true, Observer>(moving, moveSrc, moveDst, observer);
         }
 
         assert(captured.typeOrNone() != PieceTypes::kKing);
 
         observer.finalize(*this, newPos);
-
-        if (movingType == PieceTypes::kRook) {
-            newPos.m_castlingRooks.color(stm).unset(moveSrc);
-        } else if (movingType == PieceTypes::kKing) {
-            newPos.m_castlingRooks.color(stm).clear();
-        } else if (movingType == PieceTypes::kPawn && std::abs(move.fromSqRank() - move.toSqRank()) == 2) {
-            newPos.m_enPassant = move.toSq().flipRankParity();
-            newPos.m_keys.flipEp(newPos.m_enPassant);
-        }
 
         if (captured == Pieces::kNone && moving.type() != PieceTypes::kPawn) {
             ++newPos.m_halfmove;
@@ -178,20 +80,10 @@ namespace oranj {
             newPos.m_halfmove = 0;
         }
 
-        if (captured != Pieces::kNone && captured.type() == PieceTypes::kRook) {
-            newPos.m_castlingRooks.color(nstm).unset(moveDst);
-        }
-
-        if (newPos.m_castlingRooks != m_castlingRooks) {
-            newPos.m_keys.switchCastling(m_castlingRooks, newPos.m_castlingRooks);
-        }
-
         newPos.calcCheckersAndPins();
         newPos.calcThreats();
 
         newPos.calcCheckZones();
-
-        newPos.filterEp(nstm);
 
         return newPos;
     }
@@ -201,7 +93,6 @@ namespace oranj {
 
     bool Position::isLegal(Move move) const {
         assert(move != kNullMove);
-        assert(move.type() == MoveType::kPromotion || move.promoIdx() == 0);
 
         const auto us = stm();
 
@@ -209,16 +100,19 @@ namespace oranj {
 
         const auto src = move.fromSq();
         const auto dst = move.toSq();
+
+        if (src == dst) {
+            return false;
+        }
+
         const auto srcPiece = pieceOn(src);
         const auto dstPiece = pieceOn(dst);
-
-        const auto type = move.type();
 
         if (srcPiece == Pieces::kNone || srcPiece.color() != us) {
             return false;
         }
 
-        if (m_checkers && srcPiece != PieceTypes::kKing.withColor(us)) {
+        if (m_checkers && srcPiece.type() != PieceTypes::kKing) {
             // multiple checks can only be evaded with a king move
             if (m_checkers.multiple()) {
                 return false;
@@ -226,9 +120,7 @@ namespace oranj {
 
             // one checker may be evaded, blocked, or captured
             const auto checker = m_checkers.lowestSquare();
-            if (!(rayBetween(kingSq, checker) | Bitboard::fromSquare(checker)).hasSq(dst)
-                && type != MoveType::kEnPassant)
-            {
+            if (!(rayBetween(kingSq, checker) | Bitboard::fromSquare(checker)).hasSq(dst)) {
                 return false;
             }
         }
@@ -238,17 +130,7 @@ namespace oranj {
             return false;
         }
 
-        // we're capturing something
-        if (dstPiece != Pieces::kNone
-            // we're capturing our own piece
-            && ((dstPiece.color() == us
-                 //  and either not castling
-                 && (type != MoveType::kCastling
-                     // or trying to castle with a non-rook
-                     || dstPiece != PieceTypes::kRook.withColor(us)))
-                // or trying to capture a king
-                || dstPiece.type() == PieceTypes::kKing))
-        {
+        if (dstPiece != Pieces::kNone && dstPiece.color() == us) {
             return false;
         }
 
@@ -256,79 +138,9 @@ namespace oranj {
         const auto them = us.flip();
         const auto occ = this->occ();
 
-        if (type == MoveType::kCastling) {
-            if (srcPieceType != PieceTypes::kKing || isCheck()) {
-                return false;
-            }
-
-            const auto homeRank = relativeRank(us, 0);
-
-            // wrong rank
-            if (move.fromSqRank() != homeRank || move.toSqRank() != homeRank) {
-                return false;
-            }
-
-            Square kingDst, rookDst;
-
-            if (src.file() < dst.file()) {
-                // no castling rights
-                if (dst != m_castlingRooks.color(us).kingside) {
-                    return false;
-                }
-
-                kingDst = src.withFile(kFileG);
-                rookDst = src.withFile(kFileF);
-            } else {
-                // no castling rights
-                if (dst != m_castlingRooks.color(us).queenside) {
-                    return false;
-                }
-
-                kingDst = src.withFile(kFileC);
-                rookDst = src.withFile(kFileD);
-            }
-
-            // same checks as for movegen
-            if (g_opts.chess960) {
-                const auto toKingDst = rayBetween(src, kingDst);
-                const auto toRook = rayBetween(src, dst);
-
-                const auto castleOcc = occ ^ src.bit() ^ dst.bit();
-                const auto clearMask = toKingDst | toRook | kingDst.bit() | rookDst.bit();
-                const auto checkMask = toKingDst | kingDst.bit();
-
-                return (castleOcc & clearMask).empty() && (m_threats & checkMask).empty() && !pinned(us).hasSq(dst);
-            } else {
-                if (dst == m_castlingRooks.black().kingside) {
-                    return (occ & U64(0x6000000000000000)).empty() && (m_threats & U64(0x7000000000000000)).empty();
-                } else if (dst == m_castlingRooks.black().queenside) {
-                    return (occ & U64(0x0E00000000000000)).empty() && (m_threats & U64(0x1C00000000000000)).empty();
-                } else if (dst == m_castlingRooks.white().kingside) {
-                    return (occ & U64(0x0000000000000060)).empty() && (m_threats & U64(0x0000000000000070)).empty();
-                } else {
-                    return (occ & U64(0x000000000000000E)).empty() && (m_threats & U64(0x000000000000001C)).empty();
-                }
-            }
-        }
-
         if (srcPieceType == PieceTypes::kPawn) {
-            if (type == MoveType::kEnPassant) {
-                if (dst != m_enPassant || !attacks::getPawnAttacks(m_enPassant, them).hasSq(src)) {
-                    return false;
-                }
-
-                const auto captureSquare = dst.flipRankParity();
-                const auto postEpOcc =
-                    occ ^ Bitboard::fromSquare(src) ^ Bitboard::fromSquare(dst) ^ Bitboard::fromSquare(captureSquare);
-
-                const auto theirQueens = m_bbs.queens(them);
-
-                return (attacks::getBishopAttacks(kingSq, postEpOcc) & (theirQueens | m_bbs.bishops(them))).empty()
-                    && (attacks::getRookAttacks(kingSq, postEpOcc) & (theirQueens | m_bbs.rooks(them))).empty();
-            }
-
-            const auto srcRank = move.fromSqRank();
-            const auto dstRank = move.toSqRank();
+            const auto srcRank = src.rank();
+            const auto dstRank = dst.rank();
 
             // backwards move
             if ((us == Colors::kBlack && dstRank >= srcRank) || (us == Colors::kWhite && dstRank <= srcRank)) {
@@ -338,12 +150,12 @@ namespace oranj {
             const auto promoRank = relativeRank(us, 7);
 
             // non-promotion move to back rank, or promotion move to any other rank
-            if ((type == MoveType::kPromotion) != (dstRank == promoRank)) {
+            if (move.isPromo() != (dstRank == promoRank)) {
                 return false;
             }
 
             // sideways move
-            if (move.fromSqFile() != move.toSqFile()) {
+            if (src.file() != dst.file()) {
                 // not valid attack
                 if (!(attacks::getPawnAttacks(src, us) & bb(them)).hasSq(dst)) {
                     return false;
@@ -353,35 +165,28 @@ namespace oranj {
                 return false;
             }
 
-            const auto delta = std::abs(dstRank - srcRank);
-            const auto maxDelta = 1 + (srcRank == relativeRank(us, kRank2));
-
-            if (delta > maxDelta) {
-                return false;
-            }
-
-            if (delta == 2 && occ.hasSq(dst.flipRankParity())) {
+            if (std::abs(dstRank - srcRank) > 1) {
                 return false;
             }
         } else {
-            if (type == MoveType::kPromotion || type == MoveType::kEnPassant) {
+            if (move.isPromo()) {
                 return false;
             }
 
-            Bitboard attacks{};
+            Bitboard attacks;
 
             switch (srcPieceType.raw()) {
+                case PieceTypes::kAlfil.raw():
+                    attacks = attacks::getAlfilAttacks(src);
+                    break;
+                case PieceTypes::kFerz.raw():
+                    attacks = attacks::getFerzAttacks(src);
+                    break;
                 case PieceTypes::kKnight.raw():
                     attacks = attacks::getKnightAttacks(src);
                     break;
-                case PieceTypes::kBishop.raw():
-                    attacks = attacks::getBishopAttacks(src, occ);
-                    break;
                 case PieceTypes::kRook.raw():
                     attacks = attacks::getRookAttacks(src, occ);
-                    break;
-                case PieceTypes::kQueen.raw():
-                    attacks = attacks::getQueenAttacks(src, occ);
                     break;
                 case PieceTypes::kKing.raw():
                     attacks = attacks::getKingAttacks(src) & ~m_threats;
@@ -427,16 +232,17 @@ namespace oranj {
 
         Bitboard attackers{};
 
-        const auto queens = bbs.queens();
-
-        const auto rooks = queens | bbs.rooks();
+        const auto rooks = bbs.rooks();
         attackers |= rooks & attacks::getRookAttacks(sq, occ);
-
-        const auto bishops = queens | bbs.bishops();
-        attackers |= bishops & attacks::getBishopAttacks(sq, occ);
 
         attackers |= bbs.blackPawns() & attacks::getPawnAttacks(sq, Colors::kWhite);
         attackers |= bbs.whitePawns() & attacks::getPawnAttacks(sq, Colors::kBlack);
+
+        const auto alfils = bbs.alfils();
+        attackers |= alfils & attacks::getAlfilAttacks(sq);
+
+        const auto ferzes = bbs.ferzes();
+        attackers |= ferzes & attacks::getFerzAttacks(sq);
 
         const auto knights = bbs.knights();
         attackers |= knights & attacks::getKnightAttacks(sq);
@@ -457,6 +263,12 @@ namespace oranj {
         const auto pawns = bbs.pawns(attacker);
         attackers |= pawns & attacks::getPawnAttacks(sq, attacker.flip());
 
+        const auto alfils = bbs.alfils(attacker);
+        attackers |= alfils & attacks::getAlfilAttacks(sq);
+
+        const auto ferzes = bbs.ferzes(attacker);
+        attackers |= ferzes & attacks::getFerzAttacks(sq);
+
         const auto knights = bbs.knights(attacker);
         attackers |= knights & attacks::getKnightAttacks(sq);
 
@@ -474,13 +286,9 @@ namespace oranj {
         const auto& bbs = this->bbs();
 
         const auto occ = this->occ();
-        const auto queens = bbs.queens(attacker);
 
-        const auto rooks = queens | bbs.rooks(attacker);
+        const auto rooks = bbs.rooks(attacker);
         attackers |= rooks & attacks::getRookAttacks(sq, occ);
-
-        const auto bishops = queens | bbs.bishops(attacker);
-        attackers |= bishops & attacks::getBishopAttacks(sq, occ);
 
         return attackers;
     }
@@ -500,7 +308,13 @@ namespace oranj {
             }
         }
 
-        const auto occ = this->occ();
+        if (const auto alfils = m_bbs.alfils(attacker); !(alfils & attacks::getAlfilAttacks(sq)).empty()) {
+            return true;
+        }
+
+        if (const auto ferzes = m_bbs.ferzes(attacker); !(ferzes & attacks::getFerzAttacks(sq)).empty()) {
+            return true;
+        }
 
         if (const auto knights = m_bbs.knights(attacker); !(knights & attacks::getKnightAttacks(sq)).empty()) {
             return true;
@@ -514,15 +328,8 @@ namespace oranj {
             return true;
         }
 
-        const auto queens = m_bbs.queens(attacker);
-
-        if (const auto bishops = queens | m_bbs.bishops(attacker);
-            !(bishops & attacks::getBishopAttacks(sq, occ)).empty())
-        {
-            return true;
-        }
-
-        if (const auto rooks = queens | m_bbs.rooks(attacker); !(rooks & attacks::getRookAttacks(sq, occ)).empty()) {
+        const auto occ = this->occ();
+        if (const auto rooks = m_bbs.rooks(attacker); !(rooks & attacks::getRookAttacks(sq, occ)).empty()) {
             return true;
         }
 
@@ -619,7 +426,7 @@ namespace oranj {
     }
 
     bool Position::isDrawn(i32 ply, std::span<const u64> keys) const {
-        if (m_halfmove >= 100) {
+        if (m_halfmove >= 140) {
             if (!isCheck()) {
                 return true;
             }
@@ -638,28 +445,8 @@ namespace oranj {
 
         const auto& bbs = this->bbs();
 
-        if (!bbs.pawns().empty() || !bbs.majors().empty()) {
-            return false;
-        }
-
         // KK
-        if (bbs.nonPk().empty()) {
-            return true;
-        }
-
-        // KNK or KBK
-        if ((bbs.blackNonPk().empty() && bbs.whiteNonPk() == bbs.whiteMinors() && !bbs.whiteMinors().multiple())
-            || (bbs.whiteNonPk().empty() && bbs.blackNonPk() == bbs.blackMinors() && !bbs.blackMinors().multiple()))
-        {
-            return true;
-        }
-
-        // KBKB OCB
-        if ((bbs.blackNonPk() == bbs.blackBishops() && bbs.whiteNonPk() == bbs.whiteBishops())
-            && !bbs.blackBishops().multiple() && !bbs.whiteBishops().multiple()
-            && (bbs.blackBishops() & boards::kLightSquares).empty()
-                   != (bbs.whiteBishops() & boards::kLightSquares).empty())
-        {
+        if (bbs.occ() == bbs.kings()) {
             return true;
         }
 
@@ -668,42 +455,24 @@ namespace oranj {
 
     Piece Position::captureTarget(Move move) const {
         assert(move != kNullMove);
-
-        const auto type = move.type();
-
-        if (type == MoveType::kCastling) {
-            return Pieces::kNone;
-        } else if (type == MoveType::kEnPassant) {
-            return pieceOn(move.fromSq()).flipColor();
-        } else {
-            return pieceOn(move.toSq());
-        }
+        return pieceOn(move.toSq());
     }
 
     bool Position::isNoisy(Move move) const {
         assert(move != kNullMove);
-        const auto type = move.type();
-        return type != MoveType::kCastling
-            && (type == MoveType::kEnPassant || move.promo() == PieceTypes::kQueen
-                || pieceOn(move.toSq()) != Pieces::kNone);
+        return pieceOn(move.toSq()) != Pieces::kNone;
     }
 
     bool Position::givesDirectCheck(Move move) const {
         assert(move != kNullMove);
 
-        const auto movingPt = move.type() == MoveType::kPromotion ? move.promo() : pieceOn(move.fromSq()).type();
+        const auto movingPt = move.isPromo() ? PieceTypes::kFerz : pieceOn(move.fromSq()).type();
 
         if (movingPt == PieceTypes::kKing) {
             return false;
         }
 
-        const auto checkZone = [&] {
-            if (movingPt == PieceTypes::kQueen) {
-                return m_checkZones[PieceTypes::kBishop.idx()] | m_checkZones[PieceTypes::kRook.idx()];
-            }
-            return m_checkZones[movingPt.idx()];
-        }();
-
+        const auto checkZone = m_checkZones[movingPt.idx()];
         return checkZone.hasSq(move.toSq());
     }
 
@@ -730,51 +499,7 @@ namespace oranj {
             }
         }
 
-        fmt::format_to(itr, "{}", stm() == Colors::kWhite ? " w " : " b ");
-
-        if (m_castlingRooks == CastlingRooks{}) {
-            fmt::format_to(itr, "-");
-        } else if (g_opts.chess960) {
-            if (m_castlingRooks.white().kingside != Squares::kNone) {
-                fmt::format_to(itr, "{}", static_cast<char>('A' + m_castlingRooks.white().kingside.file()));
-            }
-
-            if (m_castlingRooks.white().queenside != Squares::kNone) {
-                fmt::format_to(itr, "{}", static_cast<char>('A' + m_castlingRooks.white().queenside.file()));
-            }
-
-            if (m_castlingRooks.black().kingside != Squares::kNone) {
-                fmt::format_to(itr, "{}", static_cast<char>('a' + m_castlingRooks.black().kingside.file()));
-            }
-
-            if (m_castlingRooks.black().queenside != Squares::kNone) {
-                fmt::format_to(itr, "{}", static_cast<char>('a' + m_castlingRooks.black().queenside.file()));
-            }
-        } else {
-            if (m_castlingRooks.white().kingside != Squares::kNone) {
-                fmt::format_to(itr, "K");
-            }
-
-            if (m_castlingRooks.white().queenside != Squares::kNone) {
-                fmt::format_to(itr, "Q");
-            }
-
-            if (m_castlingRooks.black().kingside != Squares::kNone) {
-                fmt::format_to(itr, "k");
-            }
-
-            if (m_castlingRooks.black().queenside != Squares::kNone) {
-                fmt::format_to(itr, "q");
-            }
-        }
-
-        if (m_enPassant != Squares::kNone) {
-            fmt::format_to(itr, " {}", m_enPassant);
-        } else {
-            fmt::format_to(itr, " -");
-        }
-
-        fmt::format_to(itr, " {} {}", m_halfmove, m_fullmove);
+        fmt::format_to(itr, "{} - - {} {}", stm() == Colors::kWhite ? " w " : " b ", m_halfmove, m_fullmove);
 
         return fen;
     }
@@ -798,9 +523,6 @@ namespace oranj {
             }
         }
 
-        m_keys.flipCastling(m_castlingRooks);
-        m_keys.flipEp(m_enPassant);
-
         if (stm() == Colors::kBlack) {
             m_keys.flipStm();
         }
@@ -809,8 +531,6 @@ namespace oranj {
         calcThreats();
 
         calcCheckZones();
-
-        filterEp(stm());
     }
 
     Move Position::moveFromUci(std::string_view move) const {
@@ -826,33 +546,11 @@ namespace oranj {
         }
 
         if (move.length() == 5) {
-            const auto promo = PieceType::fromChar(move[4]);
-
-            if (!promo.isValidPromotion()) {
+            if (move[4] != 'q') {
                 return kNullMove;
             }
-
-            return Move::promotion(src, dst, promo);
+            return Move::promotion(src, dst);
         } else {
-            const auto srcPiece = pieceOn(src);
-
-            if (srcPiece == Pieces::kBlackKing || srcPiece == Pieces::kWhiteKing) {
-                if (g_opts.chess960) {
-                    if (pieceOn(dst) == srcPiece.copyColor(PieceTypes::kRook)) {
-                        return Move::castling(src, dst);
-                    } else {
-                        return Move::standard(src, dst);
-                    }
-                } else if (std::abs(src.file() - dst.file()) == 2) {
-                    const auto dstSq = src.withFile(src.file() < dst.file() ? kFileH : kFileA);
-                    return Move::castling(src, dstSq);
-                }
-            }
-
-            if ((srcPiece == Pieces::kBlackPawn || srcPiece == Pieces::kWhitePawn) && dst == m_enPassant) {
-                return Move::enPassant(src, dst);
-            }
-
             return Move::standard(src, dst);
         }
     }
@@ -861,19 +559,14 @@ namespace oranj {
         Position pos{};
 
         pos.m_bbs.bb(PieceTypes::kPawn) = U64(0x00FF00000000FF00);
+        pos.m_bbs.bb(PieceTypes::kAlfil) = U64(0x2400000000000024);
+        pos.m_bbs.bb(PieceTypes::kFerz) = U64(0x1000000000000010);
         pos.m_bbs.bb(PieceTypes::kKnight) = U64(0x4200000000000042);
-        pos.m_bbs.bb(PieceTypes::kBishop) = U64(0x2400000000000024);
         pos.m_bbs.bb(PieceTypes::kRook) = U64(0x8100000000000081);
-        pos.m_bbs.bb(PieceTypes::kQueen) = U64(0x0800000000000008);
-        pos.m_bbs.bb(PieceTypes::kKing) = U64(0x1000000000000010);
+        pos.m_bbs.bb(PieceTypes::kKing) = U64(0x0800000000000008);
 
         pos.m_bbs.bb(Colors::kBlack) = U64(0xFFFF000000000000);
         pos.m_bbs.bb(Colors::kWhite) = U64(0x000000000000FFFF);
-
-        pos.m_castlingRooks.black().kingside = Squares::kH8;
-        pos.m_castlingRooks.black().queenside = Squares::kA8;
-        pos.m_castlingRooks.white().kingside = Squares::kH1;
-        pos.m_castlingRooks.white().queenside = Squares::kA1;
 
         pos.m_stm = Colors::kWhite;
         pos.m_fullmove = 1;
@@ -977,122 +670,14 @@ namespace oranj {
             return {};
         }
 
-        const auto castlingRights = fen[2];
-
-        if (castlingRights.length() > 4) {
-            eprintln("invalid castling rights");
+        if (fen[2] != "-") {
+            eprintln("invalid third field");
             return {};
         }
 
-        if (castlingRights != "-") {
-            if (g_opts.chess960) {
-                for (i32 rank = 0; rank < 8; ++rank) {
-                    for (i32 file = 0; file < 8; ++file) {
-                        const auto sq = Square::fromFileRank(file, rank);
-
-                        const auto piece = pos.pieceOn(sq);
-                        if (piece != Pieces::kNone && piece.type() == PieceTypes::kKing) {
-                            pos.m_kings.color(piece.color()) = sq;
-                        }
-                    }
-                }
-
-                for (const auto flag : castlingRights) {
-                    if (flag >= 'a' && flag <= 'h') {
-                        const auto file = static_cast<i32>(flag - 'a');
-                        const auto kingFile = pos.m_kings.black().file();
-
-                        if (file == kingFile) {
-                            eprintln("invalid castling rights");
-                            return {};
-                        }
-
-                        if (file < kingFile) {
-                            pos.m_castlingRooks.black().queenside = Square::fromFileRank(file, kRank8);
-                        } else {
-                            pos.m_castlingRooks.black().kingside = Square::fromFileRank(file, kRank8);
-                        }
-                    } else if (flag >= 'A' && flag <= 'H') {
-                        const auto file = static_cast<i32>(flag - 'A');
-                        const auto kingFile = pos.m_kings.white().file();
-
-                        if (file == kingFile) {
-                            eprintln("invalid castling rights");
-                            return {};
-                        }
-
-                        if (file < kingFile) {
-                            pos.m_castlingRooks.white().queenside = Square::fromFileRank(file, kRank1);
-                        } else {
-                            pos.m_castlingRooks.white().kingside = Square::fromFileRank(file, kRank1);
-                        }
-                    } else if (flag == 'k') {
-                        for (i32 file = pos.m_kings.black().file() + 1; file < 8; ++file) {
-                            const auto sq = Square::fromFileRank(file, kRank8);
-                            if (pos.pieceOn(sq) == Pieces::kBlackRook) {
-                                pos.m_castlingRooks.black().kingside = sq;
-                                break;
-                            }
-                        }
-                    } else if (flag == 'K') {
-                        for (i32 file = pos.m_kings.white().file() + 1; file < 8; ++file) {
-                            const auto sq = Square::fromFileRank(file, kRank1);
-                            if (pos.pieceOn(sq) == Pieces::kWhiteRook) {
-                                pos.m_castlingRooks.white().kingside = sq;
-                                break;
-                            }
-                        }
-                    } else if (flag == 'q') {
-                        for (i32 file = pos.m_kings.black().file() - 1; file >= 0; --file) {
-                            const auto sq = Square::fromFileRank(file, kRank8);
-                            if (pos.pieceOn(sq) == Pieces::kBlackRook) {
-                                pos.m_castlingRooks.black().queenside = sq;
-                                break;
-                            }
-                        }
-                    } else if (flag == 'Q') {
-                        for (i32 file = pos.m_kings.white().file() - 1; file >= 0; --file) {
-                            const auto sq = Square::fromFileRank(file, kRank1);
-                            if (pos.pieceOn(sq) == Pieces::kWhiteRook) {
-                                pos.m_castlingRooks.white().queenside = sq;
-                                break;
-                            }
-                        }
-                    } else {
-                        eprintln("invalid castling rights");
-                        return {};
-                    }
-                }
-            } else {
-                for (const auto flag : castlingRights) {
-                    switch (flag) {
-                        case 'k':
-                            pos.m_castlingRooks.black().kingside = Squares::kH8;
-                            break;
-                        case 'q':
-                            pos.m_castlingRooks.black().queenside = Squares::kA8;
-                            break;
-                        case 'K':
-                            pos.m_castlingRooks.white().kingside = Squares::kH1;
-                            break;
-                        case 'Q':
-                            pos.m_castlingRooks.white().queenside = Squares::kA1;
-                            break;
-                        default:
-                            eprintln("invalid castling rights");
-                            return {};
-                    }
-                }
-            }
-        }
-
-        const auto enPassant = fen[3];
-
-        if (enPassant != "-") {
-            if (pos.m_enPassant = Square::fromStr(enPassant); pos.m_enPassant == Squares::kNone) {
-                eprintln("invalid en passant square");
-                return {};
-            }
+        if (fen[3] != "-") {
+            eprintln("invalid fourth field");
+            return {};
         }
 
         if (fen.size() >= 5) {
@@ -1111,46 +696,6 @@ namespace oranj {
             }
         }
 
-        // a couple of extra checks here
-        if (pos.m_enPassant != Squares::kNone) {
-            [&] {
-                const auto epRank = pos.m_stm == Colors::kBlack ? kRank3 : kRank6;
-                if (pos.m_enPassant.rank() != epRank) {
-                    pos.m_enPassant = Squares::kNone;
-                    return;
-                }
-
-                const auto pawnSquare = pos.m_enPassant.flipRankParity();
-                const auto origSquare = pawnSquare.flipDoublePush();
-
-                const auto oppPawn = PieceTypes::kPawn.withColor(pos.m_stm.flip());
-
-                // make sure that there's actually a pawn there that could've moved
-                if (pos.pieceOn(pawnSquare) != oppPawn               //
-                    || pos.pieceOn(pos.m_enPassant) != Pieces::kNone //
-                    || pos.pieceOn(origSquare) != Pieces::kNone)
-                {
-                    pos.m_enPassant = Squares::kNone;
-                    return;
-                }
-
-                // and ensure that the previous position would've actually
-                // been legal if the previous move was a double push
-                pos.movePieceInternal(pawnSquare, origSquare, oppPawn);
-                const bool illegal = pos.isAttacked<false>(
-                    pos.m_stm.flip(),
-                    bbs.bb(PieceTypes::kKing, pos.m_stm).lowestSquare(),
-                    pos.m_stm.flip()
-                );
-                pos.movePieceInternal(origSquare, pawnSquare, oppPawn);
-
-                if (illegal) {
-                    pos.m_enPassant = Squares::kNone;
-                    return;
-                }
-            }();
-        }
-
         pos.regen();
 
         return pos;
@@ -1163,110 +708,6 @@ namespace oranj {
         split::split(parts, fen, ' ');
 
         return fromFenParts(parts);
-    }
-
-    std::optional<Position> Position::fromFrcIndex(u32 n) {
-        assert(g_opts.chess960);
-
-        if (n >= 960) {
-            eprintln("invalid frc position index {}", n);
-            return {};
-        }
-
-        Position pos{};
-
-        pos.m_bbs.bb(PieceTypes::kPawn) = U64(0x00FF00000000FF00);
-
-        pos.m_bbs.bb(Colors::kBlack) = U64(0x00FF000000000000);
-        pos.m_bbs.bb(Colors::kWhite) = U64(0x000000000000FF00);
-
-        const auto backrank = scharnaglToBackrank(n);
-
-        bool firstRook = true;
-
-        for (i32 file = 0; file < 8; ++file) {
-            const auto blackSquare = Square::fromFileRank(file, kRank8);
-            const auto whiteSquare = Square::fromFileRank(file, kRank1);
-
-            pos.setPieceInternal(blackSquare, backrank[file].withColor(Colors::kBlack));
-            pos.setPieceInternal(whiteSquare, backrank[file].withColor(Colors::kWhite));
-
-            if (backrank[file] == PieceTypes::kRook) {
-                if (firstRook) {
-                    pos.m_castlingRooks.black().queenside = blackSquare;
-                    pos.m_castlingRooks.white().queenside = whiteSquare;
-                } else {
-                    pos.m_castlingRooks.black().kingside = blackSquare;
-                    pos.m_castlingRooks.white().kingside = whiteSquare;
-                }
-
-                firstRook = false;
-            }
-        }
-
-        pos.m_stm = Colors::kWhite;
-        pos.m_fullmove = 1;
-
-        pos.regen();
-
-        return pos;
-    }
-
-    std::optional<Position> Position::fromDfrcIndex(u32 n) {
-        assert(g_opts.chess960);
-
-        if (n >= 960 * 960) {
-            eprintln("invalid dfrc position index {}", n);
-            return {};
-        }
-
-        Position pos{};
-
-        pos.m_bbs.bb(PieceTypes::kPawn) = U64(0x00FF00000000FF00);
-
-        pos.m_bbs.bb(Colors::kBlack) = U64(0x00FF000000000000);
-        pos.m_bbs.bb(Colors::kWhite) = U64(0x000000000000FF00);
-
-        const auto blackBackrank = scharnaglToBackrank(n / 960);
-        const auto whiteBackrank = scharnaglToBackrank(n % 960);
-
-        bool firstBlackRook = true;
-        bool firstWhiteRook = true;
-
-        for (i32 file = 0; file < 8; ++file) {
-            const auto blackSquare = Square::fromFileRank(file, kRank8);
-            const auto whiteSquare = Square::fromFileRank(file, kRank1);
-
-            pos.setPieceInternal(blackSquare, blackBackrank[file].withColor(Colors::kBlack));
-            pos.setPieceInternal(whiteSquare, whiteBackrank[file].withColor(Colors::kWhite));
-
-            if (blackBackrank[file] == PieceTypes::kRook) {
-                if (firstBlackRook) {
-                    pos.m_castlingRooks.black().queenside = blackSquare;
-                } else {
-                    pos.m_castlingRooks.black().kingside = blackSquare;
-                }
-
-                firstBlackRook = false;
-            }
-
-            if (whiteBackrank[file] == PieceTypes::kRook) {
-                if (firstWhiteRook) {
-                    pos.m_castlingRooks.white().queenside = whiteSquare;
-                } else {
-                    pos.m_castlingRooks.white().kingside = whiteSquare;
-                }
-
-                firstWhiteRook = false;
-            }
-        }
-
-        pos.m_stm = Colors::kWhite;
-        pos.m_fullmove = 1;
-
-        pos.regen();
-
-        return pos;
     }
 
     template <bool kUpdateKey>
@@ -1346,7 +787,7 @@ namespace oranj {
     template Piece Position::movePiece<true, NnueObserver>(Piece, Square, Square, NnueObserver);
 
     template <bool kUpdateKey, typename Observer>
-    Piece Position::promotePawn(Piece pawn, Square src, Square dst, PieceType promo, Observer observer) {
+    Piece Position::promotePawn(Piece pawn, Square src, Square dst, Observer observer) {
         assert(pawn != Pieces::kNone);
         assert(pawn.type() == PieceTypes::kPawn);
 
@@ -1357,118 +798,35 @@ namespace oranj {
         assert(dst.rank() == relativeRank(pawn.color(), 7));
         assert(src.rank() == relativeRank(pawn.color(), 6));
 
-        assert(promo != PieceTypes::kNone);
-
         const auto captured = pieceOn(dst);
-        const auto coloredPromo = pawn.copyColor(promo);
+        const auto ferz = pawn.copyColor(PieceTypes::kFerz);
 
         if (captured != Pieces::kNone) {
             removePieceInternal(src, pawn);
             observer.pieceRemoved(*this, pawn, src);
             removePieceInternal(dst, captured);
-            setPieceInternal(dst, coloredPromo);
-            observer.pieceMutated(*this, captured, coloredPromo, dst);
+            setPieceInternal(dst, ferz);
+            observer.pieceMutated(*this, captured, ferz, dst);
             if constexpr (kUpdateKey) {
                 m_keys.flipPiece(captured, dst);
             }
         } else {
-            moveAndChangePieceInternal(src, dst, pawn, promo);
-            observer.piecePromoted(*this, pawn, src, coloredPromo, dst);
+            moveAndChangePieceInternal(src, dst, pawn, PieceTypes::kFerz);
+            observer.piecePromoted(*this, pawn, src, ferz, dst);
         }
 
         if constexpr (kUpdateKey) {
             m_keys.flipPiece(pawn, src);
-            m_keys.flipPiece(coloredPromo, dst);
+            m_keys.flipPiece(ferz, dst);
         }
 
         return captured;
     }
 
-    template Piece Position::promotePawn<false, NullObserver>(Piece, Square, Square, PieceType, NullObserver);
-    template Piece Position::promotePawn<true, NullObserver>(Piece, Square, Square, PieceType, NullObserver);
-    template Piece Position::promotePawn<false, NnueObserver>(Piece, Square, Square, PieceType, NnueObserver);
-    template Piece Position::promotePawn<true, NnueObserver>(Piece, Square, Square, PieceType, NnueObserver);
-
-    template <bool kUpdateKey, typename Observer>
-    void Position::castle(Piece king, Square kingSrc, Square rookSrc, Observer observer) {
-        assert(king != Pieces::kNone);
-        assert(king.type() == PieceTypes::kKing);
-
-        assert(kingSrc != Squares::kNone);
-        assert(rookSrc != Squares::kNone);
-        assert(kingSrc != rookSrc);
-
-        Square kingDst, rookDst;
-
-        if (kingSrc.file() < rookSrc.file()) {
-            // short
-            kingDst = kingSrc.withFile(kFileG);
-            rookDst = kingSrc.withFile(kFileF);
-        } else {
-            // long
-            kingDst = kingSrc.withFile(kFileC);
-            rookDst = kingSrc.withFile(kFileD);
-        }
-
-        observer.prepareKingMove(king.color(), kingSrc, kingDst);
-
-        m_kings.color(king.color()) = kingDst;
-
-        const auto rook = king.copyColor(PieceTypes::kRook);
-
-        removePieceInternal(kingSrc, king);
-        observer.pieceRemoved(*this, king, kingSrc);
-
-        removePieceInternal(rookSrc, rook);
-        observer.pieceRemoved(*this, rook, rookSrc);
-
-        setPieceInternal(kingDst, king);
-        observer.pieceAdded(*this, king, kingDst);
-
-        setPieceInternal(rookDst, rook);
-        observer.pieceAdded(*this, rook, rookDst);
-
-        if constexpr (kUpdateKey) {
-            m_keys.movePiece(king, kingSrc, kingDst);
-            m_keys.movePiece(rook, rookSrc, rookDst);
-        }
-    }
-
-    template void Position::castle<false, NullObserver>(Piece, Square, Square, NullObserver);
-    template void Position::castle<true, NullObserver>(Piece, Square, Square, NullObserver);
-    template void Position::castle<false, NnueObserver>(Piece, Square, Square, NnueObserver);
-    template void Position::castle<true, NnueObserver>(Piece, Square, Square, NnueObserver);
-
-    template <bool kUpdateKey, typename Observer>
-    Piece Position::enPassant(Piece pawn, Square src, Square dst, Observer observer) {
-        assert(pawn != Pieces::kNone);
-        assert(pawn.type() == PieceTypes::kPawn);
-
-        assert(src != Squares::kNone);
-        assert(dst != Squares::kNone);
-        assert(src != dst);
-
-        const auto captureSquare = dst.flipRankParity();
-        const auto enemyPawn = pawn.flipColor();
-
-        removePieceInternal(captureSquare, enemyPawn);
-        observer.pieceRemoved(*this, enemyPawn, captureSquare);
-
-        movePieceInternal(src, dst, pawn);
-        observer.pieceMoved(*this, pawn, src, dst);
-
-        if constexpr (kUpdateKey) {
-            m_keys.movePiece(pawn, src, dst);
-            m_keys.flipPiece(enemyPawn, captureSquare);
-        }
-
-        return enemyPawn;
-    }
-
-    template Piece Position::enPassant<false, NullObserver>(Piece, Square, Square, NullObserver);
-    template Piece Position::enPassant<true, NullObserver>(Piece, Square, Square, NullObserver);
-    template Piece Position::enPassant<false, NnueObserver>(Piece, Square, Square, NnueObserver);
-    template Piece Position::enPassant<true, NnueObserver>(Piece, Square, Square, NnueObserver);
+    template Piece Position::promotePawn<false, NullObserver>(Piece, Square, Square, NullObserver);
+    template Piece Position::promotePawn<true, NullObserver>(Piece, Square, Square, NullObserver);
+    template Piece Position::promotePawn<false, NnueObserver>(Piece, Square, Square, NnueObserver);
+    template Piece Position::promotePawn<true, NnueObserver>(Piece, Square, Square, NnueObserver);
 
     void Position::setPieceInternal(Square sq, Piece piece) {
         assert(sq != Squares::kNone);
@@ -1546,11 +904,7 @@ namespace oranj {
             const auto ourOcc = bb(c);
             const auto oppOcc = bb(opponent);
 
-            const auto oppQueens = m_bbs.queens(opponent);
-
-            const auto potentialAttackers =
-                attacks::getBishopAttacks(king, oppOcc) & (oppQueens | m_bbs.bishops(opponent))
-                | attacks::getRookAttacks(king, oppOcc) & (oppQueens | m_bbs.rooks(opponent));
+            const auto potentialAttackers = attacks::getRookAttacks(king, oppOcc) & m_bbs.rooks(opponent);
 
             for (const auto potentialAttacker : potentialAttackers) {
                 const auto maybePinned = ourOcc & rayBetween(potentialAttacker, king);
@@ -1571,14 +925,16 @@ namespace oranj {
         m_threats = Bitboard{};
 
         const auto occ = this->occ() & ~m_bbs.kings(us);
-        const auto queens = m_bbs.queens(them);
-
-        for (const auto rook : queens | m_bbs.rooks(them)) {
+        for (const auto rook : m_bbs.rooks(them)) {
             m_threats |= attacks::getRookAttacks(rook, occ);
         }
 
-        for (const auto bishop : queens | m_bbs.bishops(them)) {
-            m_threats |= attacks::getBishopAttacks(bishop, occ);
+        for (const auto alfil : m_bbs.alfils(them)) {
+            m_threats |= attacks::getAlfilAttacks(alfil);
+        }
+
+        for (const auto ferz : m_bbs.ferzes(them)) {
+            m_threats |= attacks::getFerzAttacks(ferz);
         }
 
         for (const auto knight : m_bbs.knights(them)) {
@@ -1600,90 +956,10 @@ namespace oranj {
         const auto occ = this->occ();
 
         m_checkZones[0] = attacks::getPawnAttacks(oppKingSq, nstm());
-        m_checkZones[1] = attacks::getKnightAttacks(oppKingSq);
-        m_checkZones[2] = attacks::getBishopAttacks(oppKingSq, occ);
-        m_checkZones[3] = attacks::getRookAttacks(oppKingSq, occ);
-    }
-
-    void Position::filterEp(Color capturing) {
-        if (m_enPassant == Squares::kNone) {
-            return;
-        }
-
-        const auto unset = [this] {
-            m_keys.flipEp(m_enPassant);
-            m_enPassant = Squares::kNone;
-        };
-
-        const auto movedPawn = m_enPassant.flipRankParity();
-
-        // if we are in check, we must be checked by the pushed pawn only for ep to be valid
-        if (!(checkers() & ~movedPawn.bit()).empty()) {
-            unset();
-            return;
-        }
-
-        const auto moved = capturing.flip();
-
-        const auto kingSq = m_kings.color(capturing);
-
-        const auto pinnedPieces = pinned(capturing);
-        auto candidates = m_bbs.pawns(capturing) & attacks::getPawnAttacks(m_enPassant, moved);
-
-        // vertically pinned pawns cannot capture at all
-        const auto vertPinned = pinnedPieces & boards::kFiles[kingSq.file()];
-        candidates &= ~vertPinned;
-
-        if (!candidates) {
-            unset();
-            return;
-        }
-
-        const auto diagPinned = candidates & pinnedPieces;
-
-        if (candidates.multiple()) {
-            // if there are two diagonally pinned pawns, neither can possibly capture
-            if (candidates == diagPinned) {
-                unset();
-            }
-
-            // otherwise, one pawn has to be unpinned, and thus ep is legal.
-            // the discovered check case handled below cannot apply -
-            // the other pawn will still block the potential check.
-
-            // either way, we can stop here
-            return;
-        }
-
-        // if the capturing pawn is pinned, it has to be pinned
-        // along the same diagonal that the capture would occur
-        if (diagPinned) {
-            const auto pinnedPawn = diagPinned.lowestSquare();
-            const auto pinRay = attacks::getBishopAttacks(kingSq, bb(moved)) & rayIntersecting(kingSq, pinnedPawn);
-
-            if (!pinRay.hasSq(m_enPassant)) {
-                unset();
-                return;
-            }
-        }
-
-        // also handle the annoying case where capturing en passant would cause discovered check
-        const auto capturingPawn = candidates.lowestSquare();
-
-        const auto rank = Bitboard::rank(movedPawn.rank());
-        const auto oppRookCandidates = rank & (m_bbs.rooks(moved) | m_bbs.queens(moved));
-
-        // not possible :3
-        if (!rank.hasSq(kingSq) || !oppRookCandidates) {
-            return;
-        }
-
-        const auto pawnlessOcc = occ() ^ movedPawn.bit() ^ capturingPawn.bit();
-        const auto attacks = attacks::getRookAttacks(kingSq, pawnlessOcc);
-
-        if (attacks & oppRookCandidates) {
-            unset();
-        }
+        m_checkZones[1] = attacks::getAlfilAttacks(oppKingSq);
+        m_checkZones[2] = attacks::getFerzAttacks(oppKingSq);
+        m_checkZones[3] = attacks::getKnightAttacks(oppKingSq);
+        m_checkZones[4] = attacks::getRookAttacks(oppKingSq, occ);
     }
 } // namespace oranj
 

@@ -35,7 +35,6 @@ namespace oranj {
                 const auto srcMask = srcSquare.bit();
 
                 const auto rookAttacks = attacks::kEmptyBoardRooks[from];
-                const auto bishopAttacks = attacks::kEmptyBoardBishops[from];
 
                 for (i32 to = 0; to < Squares::kCount; ++to) {
                     if (from == to) {
@@ -48,9 +47,6 @@ namespace oranj {
                     if (rookAttacks.hasSq(dstSquare)) {
                         dst[from][to] =
                             attacks::genRookAttacks(srcSquare, dstMask) & attacks::genRookAttacks(dstSquare, srcMask);
-                    } else if (bishopAttacks.hasSq(dstSquare)) {
-                        dst[from][to] = attacks::genBishopAttacks(srcSquare, dstMask)
-                                      & attacks::genBishopAttacks(dstSquare, srcMask);
                     }
                 }
             }
@@ -66,7 +62,6 @@ namespace oranj {
                 const auto srcMask = srcSquare.bit();
 
                 const auto rookAttacks = attacks::kEmptyBoardRooks[from];
-                const auto bishopAttacks = attacks::kEmptyBoardBishops[from];
 
                 for (i32 to = 0; to < Squares::kCount; ++to) {
                     if (from == to) {
@@ -79,9 +74,6 @@ namespace oranj {
                     if (rookAttacks.hasSq(dstSquare)) {
                         dst[from][to] = (srcMask | attacks::genRookAttacks(srcSquare, Bitboard{}))
                                       & (dstMask | attacks::genRookAttacks(dstSquare, Bitboard{}));
-                    } else if (bishopAttacks.hasSq(dstSquare)) {
-                        dst[from][to] = (srcMask | attacks::genBishopAttacks(srcSquare, Bitboard{}))
-                                      & (dstMask | attacks::genBishopAttacks(dstSquare, Bitboard{}));
                     }
                 }
             }
@@ -97,7 +89,6 @@ namespace oranj {
                 const auto srcMask = srcSquare.bit();
 
                 const auto rookAttacks = attacks::kEmptyBoardRooks[from];
-                const auto bishopAttacks = attacks::kEmptyBoardBishops[from];
 
                 for (i32 to = 0; to < Squares::kCount; ++to) {
                     if (from == to) {
@@ -110,9 +101,6 @@ namespace oranj {
                     if (rookAttacks.hasSq(dstSquare)) {
                         dst[from][to] = attacks::genRookAttacks(srcSquare, Bitboard{})
                                       & (attacks::genRookAttacks(dstSquare, srcMask) | dstMask);
-                    } else if (bishopAttacks.hasSq(dstSquare)) {
-                        dst[from][to] = attacks::genBishopAttacks(srcSquare, Bitboard{})
-                                      & (attacks::genBishopAttacks(dstSquare, srcMask) | dstMask);
                     }
                 }
             }

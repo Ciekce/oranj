@@ -277,11 +277,11 @@ namespace oranj::eval {
 
                     const auto mask = kPpMasks[a.idx()] & afterRemaining;
 
-                    for (const auto b : blackAfter & mask) {
+                    for (const auto b : blackAfter& mask) {
                         addIdx[nAdd++] = ppFeatureIndex(c, kingSq, pawnColor, a, Colors::kBlack, b);
                     }
 
-                    for (const auto b : whiteAfter & mask) {
+                    for (const auto b : whiteAfter& mask) {
                         addIdx[nAdd++] = ppFeatureIndex(c, kingSq, pawnColor, a, Colors::kWhite, b);
                     }
                 }
@@ -291,11 +291,11 @@ namespace oranj::eval {
 
                     const auto mask = kPpMasks[a.idx()] & beforeRemaining;
 
-                    for (const auto b : blackBefore & mask) {
+                    for (const auto b : blackBefore& mask) {
                         subIdx[nSub++] = ppFeatureIndex(c, kingSq, pawnColor, a, Colors::kBlack, b);
                     }
 
-                    for (const auto b : whiteBefore & mask) {
+                    for (const auto b : whiteBefore& mask) {
                         subIdx[nSub++] = ppFeatureIndex(c, kingSq, pawnColor, a, Colors::kWhite, b);
                     }
                 }
@@ -319,7 +319,7 @@ namespace oranj::eval {
 
             for (const auto from : occ & ~kings) {
                 const auto piece = pos.pieceOn(from);
-                for (const auto to : occ & attacks::getAttacks(piece, from, occ) & ~kings) {
+                for (const auto to : occ& attacks::getAttacks(piece, from, occ) & ~kings) {
                     const auto attacked = pos.pieceOn(to);
                     const auto feature = threatFeatureIndex(c, kingSq, piece, from, attacked, to);
                     indices.pushIf(static_cast<u16>(feature), feature >= 0);
@@ -333,18 +333,18 @@ namespace oranj::eval {
                 for (const auto [a, remaining] : ourPawns.iterWithRemaining()) {
                     const auto mask = kPpMasks[a.idx()];
 
-                    for (const auto b : remaining & mask) {
+                    for (const auto b : remaining& mask) {
                         indices.push(ppFeatureIndex(c, kingSq, c, a, c, b));
                     }
 
-                    for (const auto b : theirPawns & mask) {
+                    for (const auto b : theirPawns& mask) {
                         indices.push(ppFeatureIndex(c, kingSq, c, a, c.flip(), b));
                     }
                 }
 
                 for (const auto [a, remaining] : theirPawns.iterWithRemaining()) {
                     const auto mask = kPpMasks[a.idx()];
-                    for (const auto b : remaining & mask) {
+                    for (const auto b : remaining& mask) {
                         indices.push(ppFeatureIndex(c, kingSq, c.flip(), a, c.flip(), b));
                     }
                 }

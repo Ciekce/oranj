@@ -74,20 +74,20 @@ namespace oranj {
             return bb(PieceTypes::kPawn);
         }
 
+        [[nodiscard]] inline Bitboard alfils() const {
+            return bb(PieceTypes::kAlfil);
+        }
+
+        [[nodiscard]] inline Bitboard ferzes() const {
+            return bb(PieceTypes::kFerz);
+        }
+
         [[nodiscard]] inline Bitboard knights() const {
             return bb(PieceTypes::kKnight);
         }
 
-        [[nodiscard]] inline Bitboard bishops() const {
-            return bb(PieceTypes::kBishop);
-        }
-
         [[nodiscard]] inline Bitboard rooks() const {
             return bb(PieceTypes::kRook);
-        }
-
-        [[nodiscard]] inline Bitboard queens() const {
-            return bb(PieceTypes::kQueen);
         }
 
         [[nodiscard]] inline Bitboard kings() const {
@@ -102,6 +102,22 @@ namespace oranj {
             return pawns() & white();
         }
 
+        [[nodiscard]] inline Bitboard blackAlfils() const {
+            return alfils() & black();
+        }
+
+        [[nodiscard]] inline Bitboard whiteAlfils() const {
+            return alfils() & white();
+        }
+
+        [[nodiscard]] inline Bitboard blackFerzes() const {
+            return ferzes() & black();
+        }
+
+        [[nodiscard]] inline Bitboard whiteFerzes() const {
+            return ferzes() & white();
+        }
+
         [[nodiscard]] inline Bitboard blackKnights() const {
             return knights() & black();
         }
@@ -110,28 +126,12 @@ namespace oranj {
             return knights() & white();
         }
 
-        [[nodiscard]] inline Bitboard blackBishops() const {
-            return bishops() & black();
-        }
-
-        [[nodiscard]] inline Bitboard whiteBishops() const {
-            return bishops() & white();
-        }
-
         [[nodiscard]] inline Bitboard blackRooks() const {
             return rooks() & black();
         }
 
         [[nodiscard]] inline Bitboard whiteRooks() const {
             return rooks() & white();
-        }
-
-        [[nodiscard]] inline Bitboard blackQueens() const {
-            return queens() & black();
-        }
-
-        [[nodiscard]] inline Bitboard whiteQueens() const {
-            return queens() & white();
         }
 
         [[nodiscard]] inline Bitboard blackKings() const {
@@ -143,7 +143,7 @@ namespace oranj {
         }
 
         [[nodiscard]] inline Bitboard minors() const {
-            return knights() | bishops();
+            return knights() | alfils();
         }
 
         [[nodiscard]] inline Bitboard blackMinors() const {
@@ -155,7 +155,7 @@ namespace oranj {
         }
 
         [[nodiscard]] inline Bitboard majors() const {
-            return rooks() | queens();
+            return rooks() | ferzes();
         }
 
         [[nodiscard]] inline Bitboard blackMajors() const {
@@ -182,20 +182,20 @@ namespace oranj {
             return bb(PieceTypes::kPawn, c);
         }
 
+        [[nodiscard]] inline Bitboard alfils(Color c) const {
+            return bb(PieceTypes::kAlfil, c);
+        }
+
+        [[nodiscard]] inline Bitboard ferzes(Color c) const {
+            return bb(PieceTypes::kFerz, c);
+        }
+
         [[nodiscard]] inline Bitboard knights(Color c) const {
             return bb(PieceTypes::kKnight, c);
         }
 
-        [[nodiscard]] inline Bitboard bishops(Color c) const {
-            return bb(PieceTypes::kBishop, c);
-        }
-
         [[nodiscard]] inline Bitboard rooks(Color c) const {
             return bb(PieceTypes::kRook, c);
-        }
-
-        [[nodiscard]] inline Bitboard queens(Color c) const {
-            return bb(PieceTypes::kQueen, c);
         }
 
         [[nodiscard]] inline Bitboard kings(Color c) const {
@@ -274,31 +274,6 @@ namespace oranj {
             if (piece.type().isMajor()) {
                 majors ^= key;
             }
-        }
-
-        inline void flipEp(Square epSq) {
-            const auto key = keys::enPassant(epSq);
-
-            all ^= key;
-            pawns ^= key;
-        }
-
-        inline void flipCastling(const CastlingRooks& rooks) {
-            const auto key = keys::castling(rooks);
-
-            all ^= key;
-            blackNonPawns ^= key;
-            whiteNonPawns ^= key;
-            majors ^= key;
-        }
-
-        inline void switchCastling(const CastlingRooks& before, const CastlingRooks& after) {
-            const auto key = keys::castling(before) ^ keys::castling(after);
-
-            all ^= key;
-            blackNonPawns ^= key;
-            whiteNonPawns ^= key;
-            majors ^= key;
         }
 
         [[nodiscard]] inline bool operator==(const Keys& other) const = default;
@@ -398,14 +373,6 @@ namespace oranj {
 
         [[nodiscard]] inline Color nstm() const {
             return m_stm.flip();
-        }
-
-        [[nodiscard]] inline const CastlingRooks& castlingRooks() const {
-            return m_castlingRooks;
-        }
-
-        [[nodiscard]] inline Square enPassant() const {
-            return m_enPassant;
         }
 
         [[nodiscard]] inline u16 halfmove() const {
@@ -515,9 +482,9 @@ namespace oranj {
         [[nodiscard]] inline i32 classicalMaterial() const {
             return 1 * m_bbs.pawns().popcount()   //
                  + 3 * m_bbs.knights().popcount() //
-                 + 3 * m_bbs.bishops().popcount() //
+                 + 3 * m_bbs.alfils().popcount()  //
                  + 5 * m_bbs.rooks().popcount()   //
-                 + 9 * m_bbs.queens().popcount();
+                 + 9 * m_bbs.ferzes().popcount();
         }
 
         [[nodiscard]] inline BoardIterator begin() const;
@@ -527,9 +494,6 @@ namespace oranj {
 
         [[nodiscard]] static std::optional<Position> fromFenParts(std::span<const std::string_view> fen);
         [[nodiscard]] static std::optional<Position> fromFen(std::string_view fen);
-
-        [[nodiscard]] static std::optional<Position> fromFrcIndex(u32 n);
-        [[nodiscard]] static std::optional<Position> fromDfrcIndex(u32 n);
 
     private:
         template <bool kUpdateKeys = true>
@@ -541,11 +505,7 @@ namespace oranj {
         [[nodiscard]] Piece movePiece(Piece piece, Square src, Square dst, Observer observer);
 
         template <bool kUpdateKeys = true, typename Observer = NullObserver>
-        Piece promotePawn(Piece pawn, Square src, Square dst, PieceType promo, Observer observer);
-        template <bool kUpdateKeys = true, typename Observer = NullObserver>
-        void castle(Piece king, Square kingSrc, Square rookSrc, Observer observer);
-        template <bool kUpdateKeys = true, typename Observer = NullObserver>
-        Piece enPassant(Piece pawn, Square src, Square dst, Observer observer);
+        Piece promotePawn(Piece pawn, Square src, Square dst, Observer observer);
 
         void setPieceInternal(Square sq, Piece piece);
         void movePieceInternal(Square src, Square dst, Piece piece);
@@ -556,9 +516,6 @@ namespace oranj {
         void calcThreats();
         void calcCheckZones();
 
-        // Unsets ep squares if they are invalid (no pawn is able to capture)
-        void filterEp(Color capturing);
-
         [[nodiscard]] inline Piece& mailboxSlot(Square sq) {
             return m_mailbox[sq.idx()];
         }
@@ -566,8 +523,8 @@ namespace oranj {
         BitboardSet m_bbs{};
         std::array<Piece, Squares::kCount> m_mailbox{};
 
-        // pnbr
-        std::array<Bitboard, 4> m_checkZones{};
+        // pbqnr
+        std::array<Bitboard, 5> m_checkZones{};
 
         Keys m_keys{};
 
@@ -575,19 +532,15 @@ namespace oranj {
         std::array<Bitboard, 2> m_pinned{};
         Bitboard m_threats{};
 
-        CastlingRooks m_castlingRooks{};
-
         u16 m_halfmove{};
         u32 m_fullmove{1};
-
-        Square m_enPassant{Squares::kNone};
 
         KingPair m_kings{};
 
         Color m_stm{};
     };
 
-    static_assert(sizeof(Position) == 248);
+    static_assert(sizeof(Position) == 256);
 
     class BoardIterator {
     public:

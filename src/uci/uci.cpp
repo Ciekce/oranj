@@ -25,7 +25,6 @@
 #include <string>
 #include <vector>
 
-#include "../../3rdparty/pyrrhic/tbprobe.h"
 #include "../bench.h"
 #include "../eval/eval.h"
 #include "../limit.h"
@@ -34,7 +33,6 @@
 #include "../perft.h"
 #include "../position.h"
 #include "../search.h"
-#include "../tb.h"
 #include "../ttable.h"
 #include "../tunable.h"
 #include "../util/parse.h"
@@ -104,7 +102,6 @@ namespace oranj {
             void handlePerft(std::span<const std::string_view> args);
             void handleSplitperft(std::span<const std::string_view> args);
             void handleBench(std::span<const std::string_view> args);
-            void handleProbeWdl();
             void handleWait();
             void handleMove(std::span<const std::string_view> args);
 
@@ -137,8 +134,6 @@ namespace oranj {
 
             bool m_quit{false};
 
-            bool m_tbInitialized{false};
-
             search::Searcher m_searcher{};
 
             std::vector<u64> m_keyHistory{};
@@ -161,7 +156,6 @@ namespace oranj {
             });
             registerSpinOption("MultiPV", &opts.multiPv, s_defaultOpts.multiPv, kMultiPvRange);
             registerSpinOption("Contempt", &opts.contempt, s_defaultOpts.contempt, kContemptRange);
-            registerCheckOption("UCI_Chess960", &opts.chess960, s_defaultOpts.chess960);
             registerCheckOption("UCI_ShowWDL", &opts.showWdl, s_defaultOpts.showWdl);
             registerSpinOption("EvalSharpness", &opts.evalSharpness, s_defaultOpts.evalSharpness, kEvalSharpnessRange);
             registerCheckOption("ShowCurrMove", &opts.showCurrMove, s_defaultOpts.showCurrMove);
@@ -173,42 +167,11 @@ namespace oranj {
                 s_defaultOpts.softNodeHardLimitMultiplier,
                 kSoftNodeHardLimitMultiplierRange
             );
-            registerCheckOption("EnableWeirdTCs", &opts.enableWeirdTcs, s_defaultOpts.enableWeirdTcs, [](bool) {
-                println("info string Note: EnableWeirdTCs is deprecated, and will be removed in a future release.");
-            });
             registerCheckOption("Minimal", &opts.minimal, s_defaultOpts.minimal);
-            registerStringOption("SyzygyPath", nullptr, "<empty>", [&](std::string_view value) {
-                if (value == "<empty>") {
-                    opts.syzygyEnabled = false;
-                    if (m_tbInitialized) {
-                        tb::free();
-                        m_tbInitialized = false;
-                    }
-                    return;
-                }
-
-                opts.syzygyEnabled = tb::init(value) == tb::InitStatus::kSuccess;
-                m_tbInitialized = true;
-            });
-            registerSpinOption(
-                "SyzygyProbeDepth",
-                &opts.syzygyProbeDepth,
-                s_defaultOpts.syzygyProbeDepth,
-                search::kSyzygyProbeDepthRange
-            );
-            registerSpinOption(
-                "SyzygyProbeLimit",
-                &opts.syzygyProbeLimit,
-                s_defaultOpts.syzygyProbeLimit,
-                search::kSyzygyProbeLimitRange
-            );
-            registerCheckOption("SyzygyProbeRootOnly", &opts.syzygyProbeRootOnly, s_defaultOpts.syzygyProbeRootOnly);
         }
 
         UciHandler::~UciHandler() {
-            // can't do this in a destructor, because it will run after tb::free() is called
             m_searcher.quit();
-            tb::free();
         }
 
         i32 UciHandler::run(std::span<const std::string_view> commands) {
@@ -284,8 +247,6 @@ namespace oranj {
                 handleSplitperft(args);
             } else if (command == "bench") {
                 handleBench(args);
-            } else if (command == "probewdl") {
-                handleProbeWdl();
             } else if (command == "wait") {
                 handleWait();
             } else if (command == "move") {
@@ -364,38 +325,6 @@ namespace oranj {
 
                 const auto parts = args.subspan(0, count);
                 const auto newPos = Position::fromFenParts(parts);
-
-                if (!newPos) {
-                    return;
-                }
-
-                m_pos = *newPos;
-                m_keyHistory.clear();
-
-                next += count;
-            } else if (type == "frc" || type == "dfrc") {
-                if (!g_opts.chess960) {
-                    eprintln("Chess960 not enabled");
-                    return;
-                }
-
-                const auto count = std::distance(args.begin(), std::ranges::find(args, "moves"));
-
-                const bool dfrc = type == "dfrc";
-
-                if (count == 0) {
-                    eprintln("Missing {} index", dfrc ? "DFRC" : "FRC");
-                    return;
-                }
-
-                const auto index = util::tryParse<u32>(args[0]);
-
-                if (!index) {
-                    eprintln("Invalid {} index {}", dfrc ? "DFRC" : "FRC", args[0]);
-                    return;
-                }
-
-                const auto newPos = dfrc ? Position::fromDfrcIndex(*index) : Position::fromFrcIndex(*index);
 
                 if (!newPos) {
                     return;
@@ -628,29 +557,13 @@ namespace oranj {
                 };
 
                 if (movesToGo) {
-                    if (g_opts.enableWeirdTcs) {
-                        println(
-                            "info string Warning: Stormphrax does not officially support cyclic (movestogo) time controls"
-                        );
-                    } else {
-                        println(
-                            "info string Cyclic (movestogo) time controls not enabled, see the EnableWeirdTCs option"
-                        );
-                        println("bestmove 0000");
-                        return;
-                    }
+                    println("info string Cyclic (movestogo) time controls not supported");
+                    println("bestmove 0000");
+                    return;
                 } else if (limits.increment == 0) {
-                    if (g_opts.enableWeirdTcs) {
-                        println(
-                            "info string Warning: Stormphrax does not officially support sudden death (0 increment) time controls"
-                        );
-                    } else {
-                        println(
-                            "info string Sudden death (0 increment) time controls not enabled, see the EnableWeirdTCs option"
-                        );
-                        println("bestmove 0000");
-                        return;
-                    }
+                    println("info string Sudden death (0 increment) time controls not supported");
+                    println("bestmove 0000");
+                    return;
                 }
 
                 limiter.setTournamentTime(limits);
@@ -886,41 +799,6 @@ namespace oranj {
             bench::run(depth, ttSize);
 
             m_quit = true;
-        }
-
-        void UciHandler::handleProbeWdl() {
-            if (!m_tbInitialized || !g_opts.syzygyEnabled) {
-                eprintln("no TBs loaded");
-                return;
-            }
-
-            if (m_pos.occ().popcount() > TB_LARGEST) {
-                eprintln("too many pieces");
-                return;
-            }
-
-            const auto [wdl, dtzSucceeded] = tb::probeRoot(m_pos, m_keyHistory);
-
-            switch (wdl) {
-                case search::GameResult::kNone:
-                    print("failed");
-                    break;
-                case search::GameResult::kWin:
-                    print("win");
-                    break;
-                case search::GameResult::kDraw:
-                    print("draw");
-                    break;
-                case search::GameResult::kLoss:
-                    print("loss");
-                    break;
-            }
-
-            if (wdl != search::GameResult::kNone && !dtzSucceeded) {
-                print(" (DTZ probe failed)");
-            }
-
-            println();
         }
 
         void UciHandler::handleWait() {

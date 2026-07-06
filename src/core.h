@@ -108,29 +108,29 @@ namespace oranj {
         [[nodiscard]] constexpr Piece withColor(Color c) const;
 
         [[nodiscard]] constexpr bool isMajor() const {
-            return m_id == kRookId || m_id == kQueenId;
+            return m_id == kRookId || m_id == kFerzId;
         }
 
         [[nodiscard]] constexpr bool isMinor() const {
-            return m_id == kKnightId || m_id == kBishopId;
+            return m_id == kKnightId || m_id == kAlfilId;
         }
 
         [[nodiscard]] constexpr bool isValidPromotion() const {
-            return m_id == kKnightId || m_id == kBishopId || m_id == kRookId || m_id == kQueenId;
+            return m_id == kKnightId || m_id == kAlfilId || m_id == kRookId || m_id == kFerzId;
         }
 
         [[nodiscard]] constexpr char asChar() const {
             switch (m_id) {
                 case kPawnId:
                     return 'P';
+                case kAlfilId:
+                    return 'B';
+                case kFerzId:
+                    return 'Q';
                 case kKnightId:
                     return 'N';
-                case kBishopId:
-                    return 'B';
                 case kRookId:
                     return 'R';
-                case kQueenId:
-                    return 'Q';
                 case kKingId:
                     return 'K';
                 default:
@@ -147,14 +147,14 @@ namespace oranj {
             switch (c) {
                 case 'p':
                     return PieceType{kPawnId};
+                case 'b':
+                    return PieceType{kAlfilId};
+                case 'q':
+                    return PieceType{kFerzId};
                 case 'n':
                     return PieceType{kKnightId};
-                case 'b':
-                    return PieceType{kBishopId};
                 case 'r':
                     return PieceType{kRookId};
-                case 'q':
-                    return PieceType{kQueenId};
                 case 'k':
                     return PieceType{kKingId};
                 default:
@@ -179,10 +179,10 @@ namespace oranj {
 
         enum : u8 {
             kPawnId = 0,
+            kAlfilId,
+            kFerzId,
             kKnightId,
-            kBishopId,
             kRookId,
-            kQueenId,
             kKingId,
             kNoneId,
         };
@@ -194,10 +194,10 @@ namespace oranj {
         PieceTypes() = delete;
 
         static constexpr PieceType kPawn{PieceType::kPawnId};
+        static constexpr PieceType kAlfil{PieceType::kAlfilId};
+        static constexpr PieceType kFerz{PieceType::kFerzId};
         static constexpr PieceType kKnight{PieceType::kKnightId};
-        static constexpr PieceType kBishop{PieceType::kBishopId};
         static constexpr PieceType kRook{PieceType::kRookId};
-        static constexpr PieceType kQueen{PieceType::kQueenId};
         static constexpr PieceType kKing{PieceType::kKingId};
         static constexpr PieceType kNone{PieceType::kNoneId};
 
@@ -205,10 +205,10 @@ namespace oranj {
 
         static constexpr std::array kAll = {
             kPawn,
+            kAlfil,
+            kFerz,
             kKnight,
-            kBishop,
             kRook,
-            kQueen,
             kKing,
         };
     };
@@ -257,22 +257,22 @@ namespace oranj {
                     return 'p';
                 case kWhitePawnId:
                     return 'P';
+                case kBlackAlfilId:
+                    return 'b';
+                case kWhiteAlfilId:
+                    return 'B';
+                case kBlackFerzId:
+                    return 'q';
+                case kWhiteFerzId:
+                    return 'Q';
                 case kBlackKnightId:
                     return 'n';
                 case kWhiteKnightId:
                     return 'N';
-                case kBlackBishopId:
-                    return 'b';
-                case kWhiteBishopId:
-                    return 'B';
                 case kBlackRookId:
                     return 'r';
                 case kWhiteRookId:
                     return 'R';
-                case kBlackQueenId:
-                    return 'q';
-                case kWhiteQueenId:
-                    return 'Q';
                 case kBlackKingId:
                     return 'k';
                 case kWhiteKingId:
@@ -293,22 +293,22 @@ namespace oranj {
                     return Piece{kBlackPawnId};
                 case 'P':
                     return Piece{kWhitePawnId};
+                case 'b':
+                    return Piece{kBlackAlfilId};
+                case 'B':
+                    return Piece{kWhiteAlfilId};
+                case 'q':
+                    return Piece{kBlackFerzId};
+                case 'Q':
+                    return Piece{kWhiteFerzId};
                 case 'n':
                     return Piece{kBlackKnightId};
                 case 'N':
                     return Piece{kWhiteKnightId};
-                case 'b':
-                    return Piece{kBlackBishopId};
-                case 'B':
-                    return Piece{kWhiteBishopId};
                 case 'r':
                     return Piece{kBlackRookId};
                 case 'R':
                     return Piece{kWhiteRookId};
-                case 'q':
-                    return Piece{kBlackQueenId};
-                case 'Q':
-                    return Piece{kWhiteQueenId};
                 case 'k':
                     return Piece{kBlackKingId};
                 case 'K':
@@ -336,14 +336,14 @@ namespace oranj {
         enum : u8 {
             kBlackPawnId = 0,
             kWhitePawnId,
+            kBlackAlfilId,
+            kWhiteAlfilId,
+            kBlackFerzId,
+            kWhiteFerzId,
             kBlackKnightId,
             kWhiteKnightId,
-            kBlackBishopId,
-            kWhiteBishopId,
             kBlackRookId,
             kWhiteRookId,
-            kBlackQueenId,
-            kWhiteQueenId,
             kBlackKingId,
             kWhiteKingId,
             kNoneId,
@@ -364,14 +364,14 @@ namespace oranj {
 
         static constexpr Piece kBlackPawn{Piece::kBlackPawnId};
         static constexpr Piece kWhitePawn{Piece::kWhitePawnId};
+        static constexpr Piece kBlackAlfil{Piece::kBlackAlfilId};
+        static constexpr Piece kWhiteAlfil{Piece::kWhiteAlfilId};
+        static constexpr Piece kBlackFerz{Piece::kBlackFerzId};
+        static constexpr Piece kWhiteFerz{Piece::kWhiteFerzId};
         static constexpr Piece kBlackKnight{Piece::kBlackKnightId};
         static constexpr Piece kWhiteKnight{Piece::kWhiteKnightId};
-        static constexpr Piece kBlackBishop{Piece::kBlackBishopId};
-        static constexpr Piece kWhiteBishop{Piece::kWhiteBishopId};
         static constexpr Piece kBlackRook{Piece::kBlackRookId};
         static constexpr Piece kWhiteRook{Piece::kWhiteRookId};
-        static constexpr Piece kBlackQueen{Piece::kBlackQueenId};
-        static constexpr Piece kWhiteQueen{Piece::kWhiteQueenId};
         static constexpr Piece kBlackKing{Piece::kBlackKingId};
         static constexpr Piece kWhiteKing{Piece::kWhiteKingId};
         static constexpr Piece kNone{Piece::kNoneId};
@@ -646,65 +646,10 @@ namespace oranj {
         }
     };
 
-    struct CastlingRooks {
-        struct RookPair {
-            Square kingside{Squares::kNone};
-            Square queenside{Squares::kNone};
-
-            inline void clear() {
-                kingside = Squares::kNone;
-                queenside = Squares::kNone;
-            }
-
-            inline void unset(Square sq) {
-                assert(sq != Squares::kNone);
-
-                if (sq == kingside) {
-                    kingside = Squares::kNone;
-                } else if (sq == queenside) {
-                    queenside = Squares::kNone;
-                }
-            }
-
-            [[nodiscard]] inline bool operator==(const RookPair&) const = default;
-        };
-
-        std::array<RookPair, 2> rooks;
-
-        [[nodiscard]] inline const RookPair& black() const {
-            return rooks[0];
-        }
-
-        [[nodiscard]] inline const RookPair& white() const {
-            return rooks[1];
-        }
-
-        [[nodiscard]] inline RookPair& black() {
-            return rooks[0];
-        }
-
-        [[nodiscard]] inline RookPair& white() {
-            return rooks[1];
-        }
-
-        [[nodiscard]] inline const RookPair& color(Color c) const {
-            assert(c != Colors::kNone);
-            return rooks[c.idx()];
-        }
-
-        [[nodiscard]] inline RookPair& color(Color c) {
-            assert(c != Colors::kNone);
-            return rooks[c.idx()];
-        }
-
-        [[nodiscard]] inline bool operator==(const CastlingRooks&) const = default;
-    };
-
     using Score = i32;
 
     constexpr auto kScoreInf = 32767;
     constexpr auto kScoreMate = 32766;
-    constexpr auto kScoreTbWin = 30000;
     constexpr auto kScoreWin = 25000;
 
     constexpr auto kScoreNone = -kScoreInf;
@@ -721,18 +666,6 @@ namespace oranj {
 
     [[nodiscard]] constexpr bool isDecisive(Score score) {
         return std::abs(score) > kScoreWin;
-    }
-
-    [[nodiscard]] constexpr bool isMating(Score score) {
-        return score > kScoreTbWin;
-    }
-
-    [[nodiscard]] constexpr bool isMated(Score score) {
-        return score < -kScoreTbWin;
-    }
-
-    [[nodiscard]] constexpr bool isMate(Score score) {
-        return std::abs(score) > kScoreTbWin;
     }
 } // namespace oranj
 

@@ -33,7 +33,7 @@
 namespace oranj::bench {
     using namespace std::string_view_literals;
 
-    constexpr std::array kStandardFens = {
+    constexpr std::array kFens = {
         "r3k2r/2pb1ppp/2pp1q2/p7/1nP1B3/1P2P3/P2N1PPP/R2QK2R w KQkq - 0 14"sv,
         "4rrk1/2p1b1p1/p1p3q1/4p3/2P2n1p/1P1NR2P/PB3PP1/3R1QK1 b - - 2 24"sv,
         "r3qbrk/6p1/2b2pPp/p3pP1Q/PpPpP2P/3P1B2/2PB3K/R5R1 w - - 16 42"sv,
@@ -86,12 +86,6 @@ namespace oranj::bench {
         "2r2b2/5p2/5k2/p1r1pP2/P2pB3/1P3P2/K1P3R1/7R w - - 23 93"sv,
     };
 
-    constexpr std::array kFrcFens = {
-        // from SF
-        "bb1n1rkr/ppp1Q1pp/3n1p2/3p4/3P4/6Pq/PPP1PP1P/BB1NNRKR w HFhf - 0 5"sv,
-        "nqbnrkrb/pppppppp/8/8/8/8/PPPPPPPP/NQBNRKRB w GEge - 0 1"sv,
-    };
-
     void run(i32 depth, usize ttSize) {
         if (!eval::isNetworkLoaded()) {
             eprintln("No network loaded");
@@ -99,7 +93,6 @@ namespace oranj::bench {
         }
 
         const auto prevMinimal = g_opts.minimal;
-        const auto prevChess960 = g_opts.chess960;
 
         numa::bindThread(0);
 
@@ -131,20 +124,11 @@ namespace oranj::bench {
             println();
         };
 
-        opts::mutableOpts().chess960 = false;
-
-        for (const auto fen : kStandardFens) {
-            benchPosition(fen);
-        }
-
-        opts::mutableOpts().chess960 = true;
-
-        for (const auto fen : kFrcFens) {
+        for (const auto fen : kFens) {
             benchPosition(fen);
         }
 
         opts::mutableOpts().minimal = prevMinimal;
-        opts::mutableOpts().chess960 = prevChess960;
 
         println("{:.3f} seconds", time);
         println("{} nodes {} nps", nodes, static_cast<usize>(static_cast<f64>(nodes) / time));

@@ -50,11 +50,6 @@ namespace oranj::search {
         bool upperbound{false};
         bool lowerbound{false};
 
-        GameResult tbWdl{GameResult::kNone};
-        i32 tbRank{0};
-
-        util::Range<Score> tbRange{-kScoreInf, kScoreInf};
-
         i32 searchedDepth{1};
         i32 seldepth{};
 
@@ -65,27 +60,6 @@ namespace oranj::search {
         [[nodiscard]] inline Move move() const {
             assert(pv.length > 0);
             return pv.moves[0];
-        }
-
-        inline void setTbStatus(GameResult wdl, i32 rank) {
-            assert(wdl != GameResult::kNone);
-
-            tbWdl = wdl;
-            tbRank = rank;
-
-            switch (wdl) {
-                case GameResult::kWin:
-                    tbRange = {kScoreTbWin, kScoreInf};
-                    break;
-                case GameResult::kDraw:
-                    tbRange = {0, 0};
-                    break;
-                case GameResult::kLoss:
-                    tbRange = {-kScoreInf, -kScoreTbWin};
-                    break;
-                default:
-                    break;
-            }
         }
     };
 } // namespace oranj::search

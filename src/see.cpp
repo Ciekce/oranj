@@ -42,18 +42,10 @@ namespace oranj::see {
     } // namespace
 
     i32 gain(const Position& pos, Move move) {
-        const auto type = move.type();
-
-        if (type == MoveType::kCastling) {
-            return 0;
-        } else if (type == MoveType::kEnPassant) {
-            return value(PieceTypes::kPawn);
-        }
-
         auto score = value(pos.pieceOn(move.toSq()));
 
-        if (type == MoveType::kPromotion) {
-            score += value(move.promo()) - value(PieceTypes::kPawn);
+        if (move.isPromo()) {
+            score += value(PieceTypes::kFerz) - value(PieceTypes::kPawn);
         }
 
         return score;
@@ -68,7 +60,7 @@ namespace oranj::see {
             return false;
         }
 
-        auto next = move.type() == MoveType::kPromotion ? move.promo() : pos.pieceOn(move.fromSq()).type();
+        auto next = move.isPromo() ? PieceTypes::kFerz : pos.pieceOn(move.fromSq()).type();
 
         score -= value(next);
 
@@ -80,10 +72,7 @@ namespace oranj::see {
 
         auto occ = pos.occ() ^ move.fromSq().bit() ^ sq.bit();
 
-        const auto queens = pos.bb(PieceTypes::kQueen);
-
-        const auto bishops = queens | pos.bb(PieceTypes::kBishop);
-        const auto rooks = queens | pos.bb(PieceTypes::kRook);
+        const auto rooks = pos.bb(PieceTypes::kRook);
 
         const auto blackPinned = pos.pinned(Colors::kBlack);
         const auto whitePinned = pos.pinned(Colors::kWhite);
@@ -106,11 +95,7 @@ namespace oranj::see {
 
             next = popLeastValuable(pos, occ, ourAttackers, us);
 
-            if (next == PieceTypes::kPawn || next == PieceTypes::kBishop || next == PieceTypes::kQueen) {
-                attackers |= attacks::getBishopAttacks(sq, occ) & bishops;
-            }
-
-            if (next == PieceTypes::kRook || next == PieceTypes::kQueen) {
+            if (next == PieceTypes::kRook) {
                 attackers |= attacks::getRookAttacks(sq, occ) & rooks;
             }
 

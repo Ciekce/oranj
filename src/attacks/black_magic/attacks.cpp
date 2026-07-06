@@ -48,37 +48,8 @@ namespace oranj::attacks::lookup {
 
             return dst;
         }
-
-        std::array<Bitboard, kBishopData.tableSize> generateBishopAttacks() {
-            std::array<Bitboard, kBishopData.tableSize> dst{};
-
-            for (u32 square = 0; square < Squares::kCount; ++square) {
-                const auto& data = kBishopData.data[square];
-
-                const auto invMask = ~data.mask;
-                const auto maxEntries = 1 << invMask.popcount();
-
-                for (u32 i = 0; i < maxEntries; ++i) {
-                    const auto occ = util::pdep(i, invMask);
-                    const auto idx = getBishopIdx(occ, Square::fromRaw(square));
-
-                    if (!dst[data.offset + idx].empty()) {
-                        continue;
-                    }
-
-                    for (const auto dir :
-                         {offsets::kUpLeft, offsets::kUpRight, offsets::kDownLeft, offsets::kDownRight})
-                    {
-                        dst[data.offset + idx] |= internal::generateSlidingAttacks(Square::fromRaw(square), dir, occ);
-                    }
-                }
-            }
-
-            return dst;
-        }
     } // namespace
 
     const std::array<Bitboard, kRookData.tableSize> g_rookAttacks = generateRookAttacks();
-    const std::array<Bitboard, kBishopData.tableSize> g_bishopAttacks = generateBishopAttacks();
 } // namespace oranj::attacks::lookup
 #endif // !OJ_HAS_BMI2

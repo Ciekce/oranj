@@ -231,29 +231,29 @@ namespace oranj {
         }
 
         [[nodiscard]] inline const HistoryEntry& butterflyEntry(Color stm, Bitboard threats, Move move) const {
-            return m_butterfly[stm.idx()][move.fromSqIdx()][move.toSqIdx()][threats.hasSq(move.fromSq())]
+            return m_butterfly[stm.idx()][move.fromSq().idx()][move.toSq().idx()][threats.hasSq(move.fromSq())]
                               [threats.hasSq(move.toSq())];
         }
 
         [[nodiscard]] inline HistoryEntry& butterflyEntry(Color stm, Bitboard threats, Move move) {
-            return m_butterfly[stm.idx()][move.fromSqIdx()][move.toSqIdx()][threats.hasSq(move.fromSq())]
+            return m_butterfly[stm.idx()][move.fromSq().idx()][move.toSq().idx()][threats.hasSq(move.fromSq())]
                               [threats.hasSq(move.toSq())];
         }
 
         [[nodiscard]] inline const HistoryEntry& pieceToEntry(Bitboard threats, Piece moving, Move move) const {
-            return m_pieceTo[moving.idx()][move.toSqIdx()][threats.hasSq(move.fromSq())][threats.hasSq(move.toSq())];
+            return m_pieceTo[moving.idx()][move.toSq().idx()][threats.hasSq(move.fromSq())][threats.hasSq(move.toSq())];
         }
 
         [[nodiscard]] inline HistoryEntry& pieceToEntry(Bitboard threats, Piece moving, Move move) {
-            return m_pieceTo[moving.idx()][move.toSqIdx()][threats.hasSq(move.fromSq())][threats.hasSq(move.toSq())];
+            return m_pieceTo[moving.idx()][move.toSq().idx()][threats.hasSq(move.fromSq())][threats.hasSq(move.toSq())];
         }
 
         [[nodiscard]] inline const HistoryEntry& noisyEntry(Move move, Piece captured, bool defended) const {
-            return m_noisy[move.fromSqIdx()][move.toSqIdx()][captured.idx()][defended];
+            return m_noisy[move.fromSq().idx()][move.toSq().idx()][captured.idx()][defended];
         }
 
         [[nodiscard]] inline HistoryEntry& noisyEntry(Move move, Piece captured, bool defended) {
-            return m_noisy[move.fromSqIdx()][move.toSqIdx()][captured.idx()][defended];
+            return m_noisy[move.fromSq().idx()][move.toSq().idx()][captured.idx()][defended];
         }
     };
 } // namespace oranj

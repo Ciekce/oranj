@@ -25,11 +25,9 @@
 #include "marlinformat.h"
 
 namespace oranj::datagen {
-    // Format originally from Viridithas
-    // https://github.com/cosmobobak/viridithas/blob/029672a/src/datagen/dataformat.rs
-    class Viriformat {
+    class Oranjformat {
     public:
-        Viriformat();
+        Oranjformat();
 
         static constexpr auto kExtension = "vf";
 
@@ -45,5 +43,5 @@ namespace oranj::datagen {
         std::vector<ScoredMove> m_moves{};
     };
 
-    static_assert(OutputFormat<Viriformat>);
+    static_assert(OutputFormat<Oranjformat>);
 } // namespace oranj::datagen

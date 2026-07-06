@@ -34,7 +34,6 @@
 #include "eval/eval.h"
 #include "limit.h"
 #include "position.h"
-#include "tb.h"
 #include "thread.h"
 #include "ttable.h"
 #include "util/barrier.h"
@@ -163,9 +162,6 @@ namespace oranj::search {
         // specifically unfiltered root moves, when probing TBs at root
         usize m_rootMoveCount{};
 
-        bool m_tbRoot{false};
-        bool m_probeWdl{false};
-
         u32 m_multiPv{};
 
         eval::Contempt m_contempt{};
@@ -175,7 +171,6 @@ namespace oranj::search {
         numa::NumaUniqueAllocation<CorrectionHistoryTable> m_corrhists{};
 
         void populateDefaultRootMoves(const Position& pos);
-        void rankTbMoves(const Position& pos, std::span<const u64> keys);
 
         void stopThreads();
 

@@ -42,16 +42,16 @@ namespace oranj::eval {
         const auto bbs = pos.bbs();
 
         const auto npMaterial = scalingValuePawn() * bbs.pawns().popcount()     //
+                              + scalingValueAlfil() * bbs.alfils().popcount()   //
+                              + scalingValueFerz() * bbs.ferzes().popcount()    //
                               + scalingValueKnight() * bbs.knights().popcount() //
-                              + scalingValueBishop() * bbs.bishops().popcount() //
-                              + scalingValueRook() * bbs.rooks().popcount()     //
-                              + scalingValueQueen() * bbs.queens().popcount();
+                              + scalingValueRook() * bbs.rooks().popcount();
 
         eval = (eval * (materialScalingBase() + npMaterial)
                 + optimism[pos.stm().idx()] * (optimismBase() + npMaterial * optimismMaterialScale() / 1024))
-             / 32768;
+             / 16384;
 
-        eval = eval * (200 - pos.halfmove()) / 200;
+        eval = eval * (280 - pos.halfmove()) / 280;
 
         if constexpr (kCorrect) {
             const auto correction = corrhist->correction(pos, keyHistory);

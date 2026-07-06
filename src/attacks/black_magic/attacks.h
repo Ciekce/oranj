@@ -30,7 +30,6 @@
 
 namespace oranj::attacks::lookup {
     extern const std::array<Bitboard, black_magic::kRookData.tableSize> g_rookAttacks;
-    extern const std::array<Bitboard, black_magic::kBishopData.tableSize> g_bishopAttacks;
 
     [[nodiscard]] inline usize getRookIdx(Bitboard occ, Square src) {
         const auto s = src.idx();
@@ -43,17 +42,6 @@ namespace oranj::attacks::lookup {
         return ((occ | data.mask) * magic) >> shift;
     }
 
-    [[nodiscard]] inline usize getBishopIdx(Bitboard occ, Square src) {
-        const auto s = src.idx();
-
-        const auto& data = black_magic::kBishopData.data[s];
-
-        const auto magic = black_magic::kBishopMagics[s];
-        const auto shift = black_magic::kBishopShifts[s];
-
-        return ((occ | data.mask) * magic) >> shift;
-    }
-
     [[nodiscard]] inline Bitboard getRookAttacks(Square src, Bitboard occ) {
         const auto s = src.idx();
 
@@ -61,14 +49,5 @@ namespace oranj::attacks::lookup {
         const auto idx = getRookIdx(occ, src);
 
         return g_rookAttacks[data.offset + idx];
-    }
-
-    [[nodiscard]] inline Bitboard getBishopAttacks(Square src, Bitboard occ) {
-        const auto s = src.idx();
-
-        const auto& data = black_magic::kBishopData.data[s];
-        const auto idx = getBishopIdx(occ, src);
-
-        return g_bishopAttacks[data.offset + idx];
     }
 } // namespace oranj::attacks::lookup

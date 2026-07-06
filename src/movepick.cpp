@@ -226,8 +226,8 @@ namespace oranj {
             score += m_history.getNoisy(move, captured, m_pos.threats()) / 8;
             score += see::value(captured);
 
-            if (move.type() == MoveType::kPromotion) {
-                score += see::value(PieceTypes::kQueen) - see::value(PieceTypes::kPawn);
+            if (move.isPromo()) {
+                score += see::value(PieceTypes::kFerz) - see::value(PieceTypes::kPawn);
             }
         }
     }

@@ -35,7 +35,7 @@ namespace oranj::cuckoo {
         [[maybe_unused]] u32 count = 0;
 
         // skip pawns
-        for (u32 p = Pieces::kBlackKnight.raw(); p < Pieces::kNone.raw(); ++p) {
+        for (u32 p = Pieces::kBlackAlfil.raw(); p < Pieces::kNone.raw(); ++p) {
             const auto piece = Piece::fromRaw(p);
 
             for (u32 s0 = 0; s0 < Squares::kCount; ++s0) {
@@ -69,6 +69,6 @@ namespace oranj::cuckoo {
             }
         }
 
-        assert(count == 3668);
+        assert(count == 1992);
     }
 } // namespace oranj::cuckoo

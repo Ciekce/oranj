@@ -55,13 +55,8 @@ namespace oranj::limit {
         }
 
         // try to resolve >tb scores that aren't full mates yet
-        if (isMating(pvMove.score) && score >= kScoreMate - kMaxDepth) {
+        if (isWin(pvMove.score) && score >= kScoreMate - kMaxDepth) {
             m_scale = 0.15;
-            return;
-        }
-
-        if (isWin(pvMove.score)) {
-            m_scale = 0.6;
             return;
         }
 

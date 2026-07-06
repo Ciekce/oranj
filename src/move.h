@@ -24,59 +24,27 @@
 #include "util/static_vector.h"
 
 namespace oranj {
-    enum class MoveType {
-        kStandard = 0,
-        kPromotion,
-        kCastling,
-        kEnPassant,
-    };
-
     class Move {
     public:
         constexpr Move() = default;
 
-        [[nodiscard]] constexpr usize fromSqIdx() const {
-            return m_move >> 10;
+        [[nodiscard]] constexpr u16 raw() const {
+            return m_move ^ kPresentBit;
         }
 
         [[nodiscard]] constexpr Square fromSq() const {
-            return Square::fromRaw(fromSqIdx());
-        }
-
-        [[nodiscard]] constexpr i32 fromSqRank() const {
-            return m_move >> 13;
-        }
-
-        [[nodiscard]] constexpr i32 fromSqFile() const {
-            return (m_move >> 10) & 0x7;
-        }
-
-        [[nodiscard]] constexpr usize toSqIdx() const {
-            return (m_move >> 4) & 0x3F;
+            const auto raw = (m_move >> kFromShift) & kSquareMask;
+            return Square::fromRaw(raw);
         }
 
         [[nodiscard]] constexpr Square toSq() const {
-            return Square::fromRaw(toSqIdx());
+            const auto raw = (m_move >> kToShift) & kSquareMask;
+            return Square::fromRaw(raw);
         }
 
-        [[nodiscard]] constexpr i32 toSqRank() const {
-            return (m_move >> 7) & 0x7;
-        }
-
-        [[nodiscard]] constexpr i32 toSqFile() const {
-            return (m_move >> 4) & 0x7;
-        }
-
-        [[nodiscard]] constexpr usize promoIdx() const {
-            return (m_move >> 2) & 0x3;
-        }
-
-        [[nodiscard]] constexpr PieceType promo() const {
-            return PieceType::fromRaw(promoIdx() + 1);
-        }
-
-        [[nodiscard]] constexpr MoveType type() const {
-            return static_cast<MoveType>(m_move & 0x3);
+        [[nodiscard]] constexpr bool isPromo() const {
+            const auto raw = (m_move >> kPromoShift) & kFlagMask;
+            return raw != 0;
         }
 
         [[nodiscard]] constexpr bool isNull() const {
@@ -94,27 +62,42 @@ namespace oranj {
         constexpr bool operator==(const Move& other) const = default;
 
         [[nodiscard]] static constexpr Move standard(Square src, Square dst) {
-            return Move{static_cast<u16>((src.raw() << 10) | (dst.raw() << 4) | static_cast<u16>(MoveType::kStandard))};
+            auto value = kPresentBit;
+
+            value |= src.raw() << kFromShift;
+            value |= dst.raw() << kToShift;
+
+            return Move{value};
         }
 
-        [[nodiscard]] static constexpr Move promotion(Square src, Square dst, PieceType promo) {
-            assert(promo.isValidPromotion());
-            return Move{static_cast<u16>(
-                (src.raw() << 10) | (dst.raw() << 4) | ((promo.raw() - 1) << 2) | static_cast<u16>(MoveType::kPromotion)
-            )};
-        }
+        [[nodiscard]] static constexpr Move promotion(Square src, Square dst) {
+            auto value = kPresentBit;
 
-        [[nodiscard]] static constexpr Move castling(Square src, Square dst) {
-            return Move{static_cast<u16>((src.raw() << 10) | (dst.raw() << 4) | static_cast<u16>(MoveType::kCastling))};
-        }
+            value |= src.raw() << kFromShift;
+            value |= dst.raw() << kToShift;
+            value |= 1 << kPromoShift;
 
-        [[nodiscard]] static constexpr Move enPassant(Square src, Square dst) {
-            return Move{
-                static_cast<u16>((src.raw() << 10) | (dst.raw() << 4) | static_cast<u16>(MoveType::kEnPassant))
-            };
+            return Move{value};
         }
 
     private:
+        static constexpr usize kSquareBits = 6;
+        static constexpr usize kFlagBits = 1;
+
+        static constexpr auto kTotalBits = kSquareBits * 2 + kFlagBits;
+
+        static constexpr u16 kSquareMask = (1 << kSquareBits) - 1;
+        static constexpr u16 kFlagMask = (1 << kFlagBits) - 1;
+
+        static constexpr u16 kValidMask = (1 << kTotalBits) - 1;
+
+        // Make a1a1 representable by always setting the msb internally
+        static constexpr u16 kPresentBit = 1 << 15;
+
+        static constexpr usize kFromShift = 0;
+        static constexpr usize kToShift = 6;
+        static constexpr usize kPromoShift = 12;
+
         explicit constexpr Move(u16 move) :
                 m_move{move} {}
 

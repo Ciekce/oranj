@@ -29,17 +29,13 @@ namespace oranj::keys {
     namespace sizes {
         constexpr usize kPieceSquares = Pieces::kCount * Squares::kCount;
         constexpr usize kColor = 1;
-        constexpr usize kCastling = 16;
-        constexpr usize kEnPassant = 8;
 
-        constexpr auto kTotal = kPieceSquares + kColor + kCastling + kEnPassant;
+        constexpr auto kTotal = kPieceSquares + kColor;
     } // namespace sizes
 
     namespace offsets {
         constexpr usize kPieceSquares = 0;
         constexpr auto kColor = kPieceSquares + sizes::kPieceSquares;
-        constexpr auto kCastling = kColor + sizes::kColor;
-        constexpr auto kEnPassant = kCastling + sizes::kCastling;
     } // namespace offsets
 
     constexpr auto kKeys = [] {
@@ -71,41 +67,5 @@ namespace oranj::keys {
 
     inline u64 color(Color c) {
         return c == Colors::kWhite ? 0 : color();
-    }
-
-    inline u64 castling(const CastlingRooks& castlingRooks) {
-        constexpr usize BlackShort = 0x01;
-        constexpr usize BlackLong = 0x02;
-        constexpr usize WhiteShort = 0x04;
-        constexpr usize WhiteLong = 0x08;
-
-        usize flags{};
-
-        if (castlingRooks.black().kingside != Squares::kNone) {
-            flags |= BlackShort;
-        }
-        if (castlingRooks.black().queenside != Squares::kNone) {
-            flags |= BlackLong;
-        }
-        if (castlingRooks.white().kingside != Squares::kNone) {
-            flags |= WhiteShort;
-        }
-        if (castlingRooks.white().queenside != Squares::kNone) {
-            flags |= WhiteLong;
-        }
-
-        return kKeys[offsets::kCastling + flags];
-    }
-
-    inline u64 enPassant(u32 file) {
-        return kKeys[offsets::kEnPassant + file];
-    }
-
-    inline u64 enPassant(Square sq) {
-        if (sq == Squares::kNone) {
-            return 0;
-        }
-
-        return kKeys[offsets::kEnPassant + sq.file()];
     }
 } // namespace oranj::keys

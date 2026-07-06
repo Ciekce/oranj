@@ -146,9 +146,6 @@ namespace oranj::search {
 
         eval::NnueState nnueState{};
 
-        u32 pvStart{};
-        u32 pvEnd{};
-
         u32 pvIdx{};
 
         std::vector<RootMove> rootMoves{};

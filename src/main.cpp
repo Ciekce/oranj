@@ -42,40 +42,22 @@ namespace {
 
             if (mode == "datagen") {
                 const auto printUsage = [&] {
-                    eprintln(
-                        "usage: {} datagen <marlinformat/viriformat/fen> <standard/dfrc> <path> [threads] [syzygy path]",
-                        args[0]
-                    );
+                    eprintln("usage: {} datagen <marlinformat/oranjformat/fen> <path> [threads]", args[0]);
                 };
 
-                if (args.size() < 5) {
-                    printUsage();
-                    return 1;
-                }
-
-                bool dfrc = false;
-
-                if (args[3] == "dfrc") {
-                    dfrc = true;
-                } else if (args[3] != "standard") {
-                    eprintln("invalid variant '{}'", args[3]);
+                if (args.size() < 4) {
                     printUsage();
                     return 1;
                 }
 
                 u32 threads = 1;
-                if (args.size() > 5 && !util::tryParse<u32>(threads, args[5])) {
-                    eprintln("invalid number of threads '{}'", args[5]);
+                if (args.size() > 4 && !util::tryParse<u32>(threads, args[4])) {
+                    eprintln("invalid number of threads '{}'", args[4]);
                     printUsage();
                     return 1;
                 }
 
-                std::optional<std::string_view> tbPath{};
-                if (args.size() > 6) {
-                    tbPath = args[6];
-                }
-
-                return datagen::run(printUsage, args[2], dfrc, args[4], static_cast<i32>(threads), tbPath);
+                return datagen::run(printUsage, args[2], args[3], static_cast<i32>(threads));
             }
 #if OJ_EXTERNAL_TUNE
             else if (mode == "printwf" || mode == "printctt" || mode == "printob")

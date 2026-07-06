@@ -73,12 +73,12 @@ namespace oranj::eval::nnue::features::threats::geometry {
         lut[Pieces::kWhitePawn.idx()] = Bits::kWhitePawn;
         lut[Pieces::kBlackKnight.idx()] = Bits::kKnight;
         lut[Pieces::kWhiteKnight.idx()] = Bits::kKnight;
-        lut[Pieces::kBlackBishop.idx()] = Bits::kBishop;
-        lut[Pieces::kWhiteBishop.idx()] = Bits::kBishop;
+        lut[Pieces::kBlackAlfil.idx()] = Bits::kBishop;
+        lut[Pieces::kWhiteAlfil.idx()] = Bits::kBishop;
         lut[Pieces::kBlackRook.idx()] = Bits::kRook;
         lut[Pieces::kWhiteRook.idx()] = Bits::kRook;
-        lut[Pieces::kBlackQueen.idx()] = Bits::kQueen;
-        lut[Pieces::kWhiteQueen.idx()] = Bits::kQueen;
+        lut[Pieces::kBlackFerz.idx()] = Bits::kQueen;
+        lut[Pieces::kWhiteFerz.idx()] = Bits::kQueen;
         lut[Pieces::kBlackKing.idx()] = Bits::kKing;
         lut[Pieces::kWhiteKing.idx()] = Bits::kKing;
         lut[Pieces::kNone.idx()] = 0;
@@ -92,12 +92,12 @@ namespace oranj::eval::nnue::features::threats::geometry {
         lut[Pieces::kBlackPawn.idx()] = 0x00'00'02'00'02'00'00'00;
         lut[Pieces::kWhiteKnight.idx()] = 0x01'01'01'01'01'01'01'01;
         lut[Pieces::kBlackKnight.idx()] = 0x01'01'01'01'01'01'01'01;
-        lut[Pieces::kWhiteBishop.idx()] = 0xFE'00'FE'00'FE'00'FE'00;
-        lut[Pieces::kBlackBishop.idx()] = 0xFE'00'FE'00'FE'00'FE'00;
+        lut[Pieces::kWhiteAlfil.idx()] = 0xFE'00'FE'00'FE'00'FE'00;
+        lut[Pieces::kBlackAlfil.idx()] = 0xFE'00'FE'00'FE'00'FE'00;
         lut[Pieces::kWhiteRook.idx()] = 0x00'FE'00'FE'00'FE'00'FE;
         lut[Pieces::kBlackRook.idx()] = 0x00'FE'00'FE'00'FE'00'FE;
-        lut[Pieces::kWhiteQueen.idx()] = 0xFE'FE'FE'FE'FE'FE'FE'FE;
-        lut[Pieces::kBlackQueen.idx()] = 0xFE'FE'FE'FE'FE'FE'FE'FE;
+        lut[Pieces::kWhiteFerz.idx()] = 0xFE'FE'FE'FE'FE'FE'FE'FE;
+        lut[Pieces::kBlackFerz.idx()] = 0xFE'FE'FE'FE'FE'FE'FE'FE;
         lut[Pieces::kWhiteKing.idx()] = 0; // Ignore king threats
         lut[Pieces::kBlackKing.idx()] = 0; // Ignore king threats
         return lut;

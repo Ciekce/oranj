@@ -29,19 +29,17 @@
 
 #include <fmt/std.h>
 
-#include "../../3rdparty/pyrrhic/tbprobe.h"
 #include "../limit.h"
 #include "../movegen.h"
 #include "../opts.h"
 #include "../search.h"
-#include "../tb.h"
 #include "../util/ctrlc.h"
 #include "../util/rng.h"
 #include "../util/timer.h"
 #include "fen.h"
 #include "format.h"
 #include "marlinformat.h"
-#include "viriformat.h"
+#include "oranjformat.h"
 
 namespace oranj::datagen {
     using util::Instant;
@@ -52,23 +50,6 @@ namespace oranj::datagen {
 
         void initCtrlCHandler() {
             util::signal::setCtrlCHandler([] { s_stop.store(true, std::memory_order::seq_cst); });
-        }
-
-        [[nodiscard]] std::optional<Outcome> probeTb(const Position& pos) {
-            if (pos.occ().popcount() > TB_LARGEST || pos.halfmove() != 0 || pos.castlingRooks() != CastlingRooks{}) {
-                return {};
-            }
-
-            switch (tb::probeWdl(pos)) {
-                case search::GameResult::kNone:
-                    return {};
-                case search::GameResult::kWin:
-                    return pos.stm() == Colors::kBlack ? Outcome::kWhiteLoss : Outcome::kWhiteWin;
-                case search::GameResult::kDraw:
-                    return Outcome::kDraw;
-                case search::GameResult::kLoss:
-                    return pos.stm() == Colors::kBlack ? Outcome::kWhiteWin : Outcome::kWhiteLoss;
-            }
         }
 
         constexpr usize kTtSize = 16;
@@ -94,7 +75,7 @@ namespace oranj::datagen {
         constexpr usize kReportInterval = 32;
 
         template <OutputFormat Format>
-        void runThread(u32 id, bool dfrc, u64 seed, const std::filesystem::path& outDir) {
+        void runThread(u32 id, u64 seed, const std::filesystem::path& outDir) {
             numa::bindThread(id);
 
             const auto outFile = outDir / fmt::format("{}.{}", id, Format::kExtension);
@@ -143,12 +124,7 @@ namespace oranj::datagen {
             usize totalPositions{};
 
             while (!s_stop.load(std::memory_order::seq_cst)) {
-                if (dfrc) {
-                    const auto dfrcIndex = rng.nextU32(960 * 960);
-                    pos = *Position::fromDfrcIndex(dfrcIndex);
-                } else {
-                    pos = Position::startpos();
-                }
+                pos = Position::startpos();
 
                 const auto moveCount = 8 + (rng.nextU32() >> 31);
 
@@ -267,18 +243,6 @@ namespace oranj::datagen {
                         break;
                     }
 
-                    if (const auto tbOutcome = probeTb(pos)) {
-                        static constexpr std::array kScores = {
-                            -kScoreTbWin,
-                            0,
-                            kScoreTbWin,
-                        };
-
-                        outcome = *tbOutcome;
-                        output.push(true, move, kScores[static_cast<i32>(*tbOutcome)]);
-                        break;
-                    }
-
                     if (nodes >= kDatagenHardNodeLimit && ++explosionStrikes >= kMaxExplosions) {
                         break;
                     }
@@ -317,19 +281,12 @@ namespace oranj::datagen {
             }
         }
 
-        template void runThread<Marlinformat>(u32 id, bool dfrc, u64 seed, const std::filesystem::path& outDir);
-        template void runThread<Viriformat>(u32 id, bool dfrc, u64 seed, const std::filesystem::path& outDir);
-        template void runThread<Fen>(u32 id, bool dfrc, u64 seed, const std::filesystem::path& outDir);
+        template void runThread<Marlinformat>(u32 id, u64 seed, const std::filesystem::path& outDir);
+        template void runThread<Oranjformat>(u32 id, u64 seed, const std::filesystem::path& outDir);
+        template void runThread<Fen>(u32 id, u64 seed, const std::filesystem::path& outDir);
     } // namespace
 
-    i32 run(
-        const std::function<void()>& printUsage,
-        std::string_view format,
-        bool dfrc,
-        std::string_view output,
-        i32 threads,
-        std::optional<std::string_view> tbPath
-    ) {
+    i32 run(const std::function<void()>& printUsage, std::string_view format, std::string_view output, i32 threads) {
         if (!eval::isNetworkLoaded()) {
             eprintln("No network loaded");
             return 1;
@@ -339,8 +296,8 @@ namespace oranj::datagen {
 
         if (format == "marlinformat") {
             threadFunc = runThread<Marlinformat>;
-        } else if (format == "viriformat") {
-            threadFunc = runThread<Viriformat>;
+        } else if (format == "oranjformat") {
+            threadFunc = runThread<Oranjformat>;
         } else if (format == "fen") {
             threadFunc = runThread<Fen>;
         } else {
@@ -349,21 +306,7 @@ namespace oranj::datagen {
             return 1;
         }
 
-        opts::mutableOpts().chess960 = dfrc;
         opts::mutableOpts().evalSharpness = 100;
-
-        if (tbPath) {
-            println("looking for TBs in \"{}\"", *tbPath);
-
-            const auto status = tb::init(*tbPath);
-
-            if (status != tb::InitStatus::kSuccess) {
-                eprintln("No TBs found");
-                return 2;
-            }
-
-            opts::mutableOpts().syzygyEnabled = true;
-        }
 
         const auto baseSeed = util::rng::generateSingleSeed();
         println("base seed: {}", baseSeed);
@@ -381,14 +324,12 @@ namespace oranj::datagen {
 
         for (u32 i = 0; i < threads; ++i) {
             const auto seed = seedGenerator.nextSeed();
-            theThreads.emplace_back([&, i, seed] { threadFunc(i, dfrc, seed, outDir); });
+            theThreads.emplace_back([&, i, seed] { threadFunc(i, seed, outDir); });
         }
 
         for (auto& thread : theThreads) {
             thread.join();
         }
-
-        tb::free();
 
         println("done");
 

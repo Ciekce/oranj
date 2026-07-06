@@ -59,9 +59,9 @@ namespace oranj::eval::nnue::output {
 
         static inline u32 getBucket(const Position& pos) {
             const auto& bbs = pos.bbs();
-            return (!bbs.blackBishops().empty() && !bbs.whiteBishops().empty()
-                    && (bbs.blackBishops() & boards::kLightSquares).empty()
-                           != (bbs.whiteBishops() & boards::kLightSquares).empty())
+            return (!bbs.blackAlfils().empty() && !bbs.whiteAlfils().empty()
+                    && (bbs.blackAlfils() & boards::kLightSquares).empty()
+                           != (bbs.whiteAlfils() & boards::kLightSquares).empty())
                      ? 1
                      : 0;
         }

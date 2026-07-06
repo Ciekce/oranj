@@ -24,14 +24,14 @@ fmt::format_context::iterator fmt::formatter<oranj::Piece>::format(oranj::Piece 
     static constexpr std::array kPieceChars = {
         'p', // black pawn
         'P', // white pawn
+        'b', // black alfil
+        'B', // white alfil
+        'q', // black ferz
+        'Q', // white ferz
         'n', // black knight
         'N', // white knight
-        'b', // black bishop
-        'B', // white bishop
         'r', // black rook
         'R', // white rook
-        'q', // black queen
-        'Q', // white queen
         'k', // black king
         'K', // white king
         ' ', // none
@@ -52,10 +52,10 @@ fmt::format_context::iterator fmt::formatter<oranj::PieceType>::format(
 
     static constexpr std::array kPieceTypeChars = {
         'p', // pawn
+        'b', // alfil
+        'q', // ferz
         'n', // knight
-        'b', // bishop
         'r', // rook
-        'q', // queen
         'k', // king
         ' ', // none
     };

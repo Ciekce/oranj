@@ -16,41 +16,26 @@
  * along with oranj. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "viriformat.h"
+#include "oranjformat.h"
 
 #include <array>
 
 namespace oranj::datagen {
-    Viriformat::Viriformat() {
+    Oranjformat::Oranjformat() {
         m_moves.reserve(256);
     }
 
-    void Viriformat::start(const Position& initialPosition) {
+    void Oranjformat::start(const Position& initialPosition) {
         m_initial = marlinformat::PackedBoard::pack(initialPosition, 0);
         m_moves.clear();
     }
 
-    void Viriformat::push(bool filtered, Move move, Score score) {
+    void Oranjformat::push(bool filtered, Move move, Score score) {
         OJ_UNUSED(filtered);
-
-        static constexpr std::array kMoveTypes = {
-            static_cast<u16>(0x0000), // normal
-            static_cast<u16>(0xC000), // promo
-            static_cast<u16>(0x8000), // castling
-            static_cast<u16>(0x4000)  // ep
-        };
-
-        u16 viriMove{};
-
-        viriMove |= move.fromSqIdx();
-        viriMove |= move.toSqIdx() << 6;
-        viriMove |= move.promoIdx() << 12;
-        viriMove |= kMoveTypes[static_cast<i32>(move.type())];
-
-        m_moves.push_back({viriMove, static_cast<i16>(score)});
+        m_moves.push_back({move.raw(), static_cast<i16>(score)});
     }
 
-    usize Viriformat::writeAllWithOutcome(std::ostream& stream, Outcome outcome) {
+    usize Oranjformat::writeAllWithOutcome(std::ostream& stream, Outcome outcome) {
         static constexpr std::array<u8, sizeof(ScoredMove)> kNullTerminator{};
 
         m_initial.wdl = outcome;
