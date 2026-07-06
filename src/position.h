@@ -279,6 +279,12 @@ namespace oranj {
         [[nodiscard]] inline bool operator==(const Keys& other) const = default;
     };
 
+    enum class GameOutcome {
+        kWin,
+        kDraw,
+        kLoss,
+    };
+
     class Position;
 
     struct NullObserver {
@@ -463,6 +469,10 @@ namespace oranj {
 
         [[nodiscard]] bool isDrawn(i32 ply, std::span<const u64> keys) const;
 
+        [[nodiscard]] bool hasBareKing(Color c) const;
+
+        [[nodiscard]] std::optional<GameOutcome> nonMateOutcome(i32 ply, std::span<const u64> keys) const;
+
         [[nodiscard]] Piece captureTarget(Move move) const;
         [[nodiscard]] bool isNoisy(Move move) const;
         [[nodiscard]] bool givesDirectCheck(Move move) const;
@@ -481,10 +491,10 @@ namespace oranj {
 
         [[nodiscard]] inline i32 classicalMaterial() const {
             return 1 * m_bbs.pawns().popcount()   //
-                 + 3 * m_bbs.knights().popcount() //
-                 + 3 * m_bbs.alfils().popcount()  //
-                 + 5 * m_bbs.rooks().popcount()   //
-                 + 9 * m_bbs.ferzes().popcount();
+                 + 1 * m_bbs.alfils().popcount()  //
+                 + 2 * m_bbs.ferzes().popcount()  //
+                 + 4 * m_bbs.knights().popcount() //
+                 + 6 * m_bbs.rooks().popcount();
         }
 
         [[nodiscard]] inline BoardIterator begin() const;

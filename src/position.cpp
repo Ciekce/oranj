@@ -427,15 +427,8 @@ namespace oranj {
 
     bool Position::isDrawn(i32 ply, std::span<const u64> keys) const {
         if (m_halfmove >= 140) {
-            if (!isCheck()) {
-                return true;
-            }
-
-            //TODO there's a speedup possible here, but
-            // it requires a lot of movegen refactoring
             ScoredMoveList moves{};
             generateAll(moves, *this);
-
             return !moves.empty();
         }
 
@@ -451,6 +444,51 @@ namespace oranj {
         }
 
         return false;
+    }
+
+    bool Position::hasBareKing(Color c) const {
+        const auto& bbs = this->bbs();
+
+        const auto ourKings = bbs.kings(c);
+        const auto ourPieces = bbs.bb(c);
+
+        if (ourKings != ourPieces) {
+            return false;
+        }
+
+        const auto theirKings = bbs.kings(c.flip());
+        const auto theirNonKings = bbs.bb(c.flip()) ^ theirKings;
+
+        if (theirNonKings.empty()) {
+            return false;
+        }
+
+        if (theirNonKings.multiple()) {
+            return true;
+        }
+
+        const auto ourKingAttacks = attacks::getKingAttacks(king(c));
+        const auto theirKingAttacks = attacks::getKingAttacks(king(c.flip()));
+
+        const auto ourLegalAttacks = ourKingAttacks & ~theirKingAttacks;
+
+        return !(theirNonKings & ~ourLegalAttacks).empty();
+    }
+
+    std::optional<GameOutcome> Position::nonMateOutcome(i32 ply, std::span<const u64> keys) const {
+        if (isDrawn(ply, keys)) {
+            return GameOutcome::kDraw;
+        }
+
+        if (hasBareKing(stm())) {
+            return GameOutcome::kLoss;
+        }
+
+        if (hasBareKing(nstm())) {
+            return GameOutcome::kWin;
+        }
+
+        return {};
     }
 
     Piece Position::captureTarget(Move move) const {
@@ -499,7 +537,7 @@ namespace oranj {
             }
         }
 
-        fmt::format_to(itr, "{} - - {} {}", stm() == Colors::kWhite ? " w " : " b ", m_halfmove, m_fullmove);
+        fmt::format_to(itr, " {} - - {} {}", stm() == Colors::kWhite ? "w" : "b", m_halfmove, m_fullmove);
 
         return fen;
     }

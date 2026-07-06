@@ -264,6 +264,8 @@ namespace oranj {
 #endif
             println("id author {}", kAuthor);
 
+            println("option name UCI_Variant type combo default shatranj var shatranj");
+
             for (const auto& option : m_options) {
                 option.display();
             }
@@ -637,6 +639,11 @@ namespace oranj {
             }
 
             const auto id = option::Option::toId(name);
+
+            if (id == "variant") {
+                return;
+            }
+
             for (auto& option : m_options) {
                 if (option.id() == id) {
                     option.set(value);

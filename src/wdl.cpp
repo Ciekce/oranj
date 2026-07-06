@@ -52,12 +52,12 @@ namespace oranj::wdl {
 
     template <bool kSharpen>
     Score normalizeScore(Score score, i32 material) {
-        /*
         // don't normalise wins/losses, or zeroes that are pointless to normalise
         if (score == 0 || isDecisive(score)) {
             return score;
         }
 
+        /*
         const auto [a, b] = wdlParams(material);
 
         auto normalized = static_cast<f64>(score) / a;

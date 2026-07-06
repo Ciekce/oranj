@@ -998,8 +998,19 @@ namespace oranj::search {
 
             Score score{};
 
-            if (newPos.isDrawn(ply, thread.keyHistory)) {
-                score = draw;
+            if (const auto outcome = newPos.nonMateOutcome(ply, thread.keyHistory)) {
+                // outcomes are from the *nstm's* perspective, as they are from the position after the move is made
+                switch (*outcome) {
+                    case GameOutcome::kWin:
+                        score = -kScoreMate + ply + 1;
+                        break;
+                    case GameOutcome::kDraw:
+                        score = draw;
+                        break;
+                    case GameOutcome::kLoss:
+                        score = kScoreMate - ply - 1;
+                        break;
+                }
             } else {
                 auto newDepth = depth + extension - 1;
 
@@ -1193,7 +1204,7 @@ namespace oranj::search {
             if (curr.excluded) {
                 return alpha;
             }
-            return inCheck ? (-kScoreMate + ply) : 0;
+            return -kScoreMate + ply;
         }
 
         if (bestMove) {
@@ -1545,7 +1556,7 @@ namespace oranj::search {
         const auto material = thread.rootPos.classicalMaterial();
 
         // mates
-        if (isWin(score)) {
+        if (isDecisive(score)) {
             if (score > 0) {
                 print("mate {}", (kScoreMate - score + 1) / 2);
             } else {
