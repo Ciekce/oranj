@@ -24,9 +24,9 @@
 
 namespace oranj::bench {
 #if OJ_SPARSE_BENCH_L1_SIZE > 0
-    constexpr i32 kDefaultBenchDepth = 17;
+    constexpr i32 kDefaultBenchDepth = 22;
 #else
-    constexpr i32 kDefaultBenchDepth = 13;
+    constexpr i32 kDefaultBenchDepth = 19;
 #endif
 
     constexpr usize kDefaultBenchTtSize = 16;
