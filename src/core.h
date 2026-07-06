@@ -108,15 +108,11 @@ namespace oranj {
         [[nodiscard]] constexpr Piece withColor(Color c) const;
 
         [[nodiscard]] constexpr bool isMajor() const {
-            return m_id == kRookId || m_id == kFerzId;
+            return m_id == kRookId;
         }
 
         [[nodiscard]] constexpr bool isMinor() const {
-            return m_id == kKnightId || m_id == kAlfilId;
-        }
-
-        [[nodiscard]] constexpr bool isValidPromotion() const {
-            return m_id == kKnightId || m_id == kAlfilId || m_id == kRookId || m_id == kFerzId;
+            return m_id == kAlfilId || m_id == kFerzId || m_id == kKnightId;
         }
 
         [[nodiscard]] constexpr char asChar() const {
